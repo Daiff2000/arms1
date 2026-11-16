@@ -12,17 +12,15 @@ import {
   FileBarChart,
   Printer,
   FileSpreadsheet,
-  ScrollText,
   Bell,
   User,
-  Users,
   ChevronDown,
   LogOut,
-  Shield,
   KeyRound,
   Globe,
   Sun,
   Moon,
+  Grip,
 } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
 import { IntercomLogo } from '../common/IntercomLogo';
@@ -30,6 +28,7 @@ import { ArmsLogo } from '../common/ArmsLogo';
 
 export type ActiveTab =
   | 'dashboard'
+  | 'archive'
   | 'boxes'
   | 'box-detail'
   | 'dossiers'
@@ -57,7 +56,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   onOpenProfile,
   breadcrumbs = [],
 }) => {
-  const { currentUser, notifications, language, setLanguage, logout } = useArchive();
+  const { currentUser, notifications, language, setLanguage, logout, activeWorkspace, setActiveWorkspace } = useArchive();
 
   const [archiveDropdownOpen, setArchiveDropdownOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
@@ -89,26 +88,75 @@ export const TopNav: React.FC<TopNavProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const isOperations = activeWorkspace !== 'pallet-archive' && activeWorkspace !== 'minutes-archive';
+  const isPallet = activeWorkspace === 'pallet-archive';
+
   const isArchiveActive =
+    activeTab === 'archive' ||
     activeTab === 'boxes' ||
     activeTab === 'box-detail' ||
     activeTab === 'dossiers' ||
     activeTab === 'dossier-detail' ||
     activeTab === 'projects';
 
-  const activeNavClass =
-    'text-[#0B56A8] dark:text-blue-300 bg-[#EAF2FB] dark:bg-[#0B56A8]/20 font-bold';
-  const inactiveNavClass =
-    'text-slate-600 dark:text-neutral-300 hover:text-[#0B56A8] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60';
+  const activeNavClass = isPallet
+    ? 'text-[#B45309] dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 font-bold'
+    : !isOperations
+    ? 'text-[#E52225] dark:text-red-300 bg-red-50 dark:bg-red-950/40 font-bold'
+    : 'text-[#0B56A8] dark:text-blue-300 bg-[#EAF2FB] dark:bg-[#0B56A8]/20 font-bold';
+
+  const inactiveNavClass = isPallet
+    ? 'text-slate-600 dark:text-neutral-300 hover:text-[#B45309] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60'
+    : !isOperations
+    ? 'text-slate-600 dark:text-neutral-300 hover:text-[#E52225] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60'
+    : 'text-slate-600 dark:text-neutral-300 hover:text-[#0B56A8] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60';
+
+  const switcherBtnClass = isPallet
+    ? 'text-[#B45309] dark:text-amber-300 border-amber-200/80 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 hover:bg-amber-100/80 dark:hover:bg-amber-900/40'
+    : !isOperations
+    ? 'text-[#E52225] dark:text-red-300 border-red-200/80 dark:border-red-900/60 bg-red-50/80 dark:bg-red-950/30 hover:bg-red-100/80 dark:hover:bg-red-900/40'
+    : 'text-[#0B56A8] dark:text-blue-300 border-[#0B56A8]/25 bg-[#EAF2FB]/60 dark:bg-[#0B56A8]/15 hover:bg-[#EAF2FB] dark:hover:bg-[#0B56A8]/30';
+
+  const mobileActiveBtnClass = isPallet
+    ? 'bg-[#D97706] text-white'
+    : !isOperations
+    ? 'bg-[#E52225] text-white'
+    : 'bg-[#0B56A8] text-white';
+
+  const avatarBgClass = isPallet
+    ? 'bg-[#D97706]'
+    : !isOperations
+    ? 'bg-[#E52225]'
+    : 'bg-[#0B56A8]';
+
+  const breadcrumbActiveClass = isPallet
+    ? 'text-[#B45309] dark:text-amber-400 font-bold whitespace-nowrap'
+    : !isOperations
+    ? 'text-[#E52225] dark:text-red-400 font-bold whitespace-nowrap'
+    : 'text-[#0B56A8] dark:text-blue-400 font-bold whitespace-nowrap';
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-[#111111] border-b border-slate-200 dark:border-neutral-800">
       {/* Intercom Brand Tri-Color Top Hairline */}
-      <div className="h-[2px] w-full flex" aria-hidden="true">
-        <div className="flex-1 bg-[#0B56A8]" />
-        <div className="w-28 bg-[#F5A614]" />
-        <div className="w-20 bg-[#E52225]" />
-      </div>
+      {isPallet ? (
+        <div className="h-[2px] w-full flex" aria-hidden="true">
+          <div className="flex-1 bg-[#F5A614]" />
+          <div className="w-28 bg-[#0B56A8]" />
+          <div className="w-20 bg-[#E52225]" />
+        </div>
+      ) : !isOperations ? (
+        <div className="h-[2px] w-full flex" aria-hidden="true">
+          <div className="flex-1 bg-[#E52225]" />
+          <div className="w-28 bg-[#0B56A8]" />
+          <div className="w-20 bg-[#F5A614]" />
+        </div>
+      ) : (
+        <div className="h-[2px] w-full flex" aria-hidden="true">
+          <div className="flex-1 bg-[#0B56A8]" />
+          <div className="w-28 bg-[#F5A614]" />
+          <div className="w-20 bg-[#E52225]" />
+        </div>
+      )}
 
       <div className="max-w-[1640px] mx-auto px-3 sm:px-6 lg:px-10">
         <div dir="ltr" className="flex items-center justify-between h-[68px] gap-2 sm:gap-4 lg:gap-6">
@@ -165,6 +213,16 @@ export const TopNav: React.FC<TopNavProps> = ({
           >
             <button
               type="button"
+              onClick={() => setActiveWorkspace(null)}
+              title={language === 'ar' ? 'العودة إلى الأقسام الرئيسية' : 'Switch Section'}
+              className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 border ${switcherBtnClass}`}
+            >
+              <Grip className="w-4 h-4 shrink-0" />
+              <span>{language === 'ar' ? 'الأقسام' : 'Sections'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onNavigate('dashboard')}
               className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'dashboard' ? activeNavClass : inactiveNavClass
@@ -174,20 +232,21 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'الرئيسية' : 'Dashboard'}</span>
             </button>
 
-            <div className="relative" ref={archiveRef}>
-              <button
-                type="button"
-                onClick={() => setArchiveDropdownOpen(!archiveDropdownOpen)}
-                className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                  isArchiveActive || archiveDropdownOpen ? activeNavClass : inactiveNavClass
-                }`}
-              >
-                <FolderArchive className="w-4 h-4 shrink-0" />
-                <span>{language === 'ar' ? 'الأرشيف' : 'Archive'}</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform duration-200 ${archiveDropdownOpen ? 'rotate-180' : ''}`}
-                />
-              </button>
+            {isOperations ? (
+              <div className="relative" ref={archiveRef}>
+                <button
+                  type="button"
+                  onClick={() => setArchiveDropdownOpen(!archiveDropdownOpen)}
+                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                    isArchiveActive || archiveDropdownOpen ? activeNavClass : inactiveNavClass
+                  }`}
+                >
+                  <FolderArchive className="w-4 h-4 shrink-0" />
+                  <span>{language === 'ar' ? 'الأرشيف' : 'Archive'}</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform duration-200 ${archiveDropdownOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
 
               {archiveDropdownOpen && (
                 <div className="absolute top-full start-0 mt-1.5 w-60 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-xl py-2 z-50">
@@ -263,7 +322,19 @@ export const TopNav: React.FC<TopNavProps> = ({
                   </button>
                 </div>
               )}
-            </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onNavigate('archive')}
+                className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                  activeTab === 'archive' ? activeNavClass : inactiveNavClass
+                }`}
+              >
+                <FolderArchive className="w-4 h-4 shrink-0" />
+                <span>{language === 'ar' ? 'الأرشيف' : 'Archive'}</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -299,32 +370,6 @@ export const TopNav: React.FC<TopNavProps> = ({
                 <span>{language === 'ar' ? 'استيراد البيانات' : 'Import Data'}</span>
               </button>
             )}
-
-            {currentUser.role === 'System Admin' && (
-              <button
-                type="button"
-                onClick={() => onNavigate('audit')}
-                className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                  activeTab === 'audit' ? activeNavClass : inactiveNavClass
-                }`}
-              >
-                <ScrollText className="w-4 h-4 shrink-0" />
-                <span>{language === 'ar' ? 'سجل العمليات' : 'Audit Log'}</span>
-              </button>
-            )}
-
-            {currentUser.role === 'System Admin' && (
-              <button
-                type="button"
-                onClick={() => onNavigate('users')}
-                className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                  activeTab === 'users' ? activeNavClass : inactiveNavClass
-                }`}
-              >
-                <Users className="w-4 h-4 shrink-0" />
-                <span>{language === 'ar' ? 'المستخدمين' : 'Users'}</span>
-              </button>
-            )}
           </nav>
 
           {/* Physical Right Zone: Notifications + User Account + ARMS PNG Logo */}
@@ -355,7 +400,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                       : 'border-slate-200 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-900'
                   }`}
                 >
-                  <div className="w-7 h-7 rounded-full bg-[#0B56A8] text-white flex items-center justify-center text-xs font-bold shrink-0">
+                  <div className={`w-7 h-7 rounded-full ${avatarBgClass} text-white flex items-center justify-center text-xs font-bold shrink-0`}>
                     <User className="w-3.5 h-3.5" />
                   </div>
                   <div className="text-start hidden 2xl:block" dir={language === 'ar' ? 'rtl' : 'ltr'}>
@@ -407,20 +452,6 @@ export const TopNav: React.FC<TopNavProps> = ({
                         <span>{language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}</span>
                       </button>
 
-                      {currentUser.role === 'System Admin' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onNavigate('users');
-                            setProfileDropdownOpen(false);
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900 text-start font-medium"
-                        >
-                          <Shield className="w-4 h-4 text-[#0B56A8]" />
-                          <span>{language === 'ar' ? 'إدارة المستخدمين والصلاحيات' : 'User Management'}</span>
-                        </button>
-                      )}
-
                       <button
                         type="button"
                         onClick={async () => {
@@ -455,10 +486,18 @@ export const TopNav: React.FC<TopNavProps> = ({
         <div className="lg:hidden border-t border-slate-100 dark:border-neutral-800 py-2">
           <div className="flex items-center gap-1 overflow-x-auto pb-1">
             <button
+              onClick={() => setActiveWorkspace(null)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-lg shrink-0 transition-colors border ${switcherBtnClass}`}
+            >
+              <Grip className="w-3.5 h-3.5" />
+              <span>{language === 'ar' ? 'الأقسام' : 'Sections'}</span>
+            </button>
+
+            <button
               onClick={() => onNavigate('dashboard')}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
                 activeTab === 'dashboard'
-                  ? 'bg-[#0B56A8] text-white'
+                  ? mobileActiveBtnClass
                   : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
               }`}
             >
@@ -466,47 +505,63 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'الرئيسية' : 'Dashboard'}</span>
             </button>
 
-            <button
-              onClick={() => onNavigate('boxes')}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
-                activeTab === 'boxes' || activeTab === 'box-detail'
-                  ? 'bg-[#0B56A8] text-white'
-                  : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-              }`}
-            >
-              <Archive className="w-3.5 h-3.5" />
-              <span>{language === 'ar' ? 'البوكسات' : 'Boxes'}</span>
-            </button>
+            {isOperations ? (
+              <>
+                <button
+                  onClick={() => onNavigate('boxes')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
+                    activeTab === 'boxes' || activeTab === 'box-detail'
+                      ? mobileActiveBtnClass
+                      : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
+                  }`}
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  <span>{language === 'ar' ? 'البوكسات' : 'Boxes'}</span>
+                </button>
 
-            <button
-              onClick={() => onNavigate('dossiers')}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
-                activeTab === 'dossiers' || activeTab === 'dossier-detail'
-                  ? 'bg-[#0B56A8] text-white'
-                  : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-              }`}
-            >
-              <FolderArchive className="w-3.5 h-3.5" />
-              <span>{language === 'ar' ? 'الدوسيهات' : 'Dossiers'}</span>
-            </button>
+                <button
+                  onClick={() => onNavigate('dossiers')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
+                    activeTab === 'dossiers' || activeTab === 'dossier-detail'
+                      ? mobileActiveBtnClass
+                      : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
+                  }`}
+                >
+                  <FolderArchive className="w-3.5 h-3.5" />
+                  <span>{language === 'ar' ? 'الدوسيهات' : 'Dossiers'}</span>
+                </button>
 
-            <button
-              onClick={() => onNavigate('projects')}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
-                activeTab === 'projects'
-                  ? 'bg-[#0B56A8] text-white'
-                  : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5" />
-              <span>{language === 'ar' ? 'المشاريع' : 'Projects'}</span>
-            </button>
+                <button
+                  onClick={() => onNavigate('projects')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
+                    activeTab === 'projects'
+                      ? mobileActiveBtnClass
+                      : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>{language === 'ar' ? 'المشاريع' : 'Projects'}</span>
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => onNavigate('archive')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
+                  activeTab === 'archive'
+                    ? mobileActiveBtnClass
+                    : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
+                }`}
+              >
+                <FolderArchive className="w-3.5 h-3.5" />
+                <span>{language === 'ar' ? 'الأرشيف' : 'Archive'}</span>
+              </button>
+            )}
 
             <button
               onClick={() => onNavigate('reports')}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
                 activeTab === 'reports'
-                  ? 'bg-[#0B56A8] text-white'
+                  ? mobileActiveBtnClass
                   : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
               }`}
             >
@@ -518,7 +573,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               onClick={() => onNavigate('labels')}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
                 activeTab === 'labels'
-                  ? 'bg-[#0B56A8] text-white'
+                  ? mobileActiveBtnClass
                   : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
               }`}
             >
@@ -531,40 +586,12 @@ export const TopNav: React.FC<TopNavProps> = ({
                 onClick={() => onNavigate('import')}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
                   activeTab === 'import'
-                    ? 'bg-[#0B56A8] text-white'
+                    ? mobileActiveBtnClass
                     : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
                 }`}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
                 <span>{language === 'ar' ? 'استيراد' : 'Import'}</span>
-              </button>
-            )}
-
-            {currentUser.role === 'System Admin' && (
-              <button
-                onClick={() => onNavigate('audit')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
-                  activeTab === 'audit'
-                    ? 'bg-[#0B56A8] text-white'
-                    : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-                }`}
-              >
-                <ScrollText className="w-3.5 h-3.5" />
-                <span>{language === 'ar' ? 'السجل' : 'Audit'}</span>
-              </button>
-            )}
-
-            {currentUser.role === 'System Admin' && (
-              <button
-                onClick={() => onNavigate('users')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
-                  activeTab === 'users'
-                    ? 'bg-[#0B56A8] text-white'
-                    : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>{language === 'ar' ? 'المستخدمين' : 'Users'}</span>
               </button>
             )}
           </div>
@@ -581,12 +608,12 @@ export const TopNav: React.FC<TopNavProps> = ({
                 {crumb.tab ? (
                   <button
                     onClick={() => onNavigate(crumb.tab!, crumb.param)}
-                    className="hover:text-[#0B56A8] dark:hover:text-white font-medium hover:underline transition-colors whitespace-nowrap"
+                    className="hover:text-slate-900 dark:hover:text-white font-medium hover:underline transition-colors whitespace-nowrap"
                   >
                     {crumb.label}
                   </button>
                 ) : (
-                  <span className="text-[#0B56A8] dark:text-blue-400 font-bold whitespace-nowrap">{crumb.label}</span>
+                  <span className={breadcrumbActiveClass}>{crumb.label}</span>
                 )}
               </React.Fragment>
             ))}

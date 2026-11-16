@@ -7,7 +7,16 @@ import { promisify } from 'node:util';
 import postgres from 'postgres';
 
 const scrypt = promisify(scryptCallback);
-const PORT = Number(process.env.PORT || 3000);
+function resolvePort(): number {
+  const portIdx = process.argv.indexOf('--port');
+  if (portIdx !== -1 && process.argv[portIdx + 1]) {
+    const cliPort = Number(process.argv[portIdx + 1]);
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  if (process.env.NODE_ENV !== 'production') return 3000;
+  return Number(process.env.PORT || 3000);
+}
+const PORT = resolvePort();
 const HOST = '0.0.0.0';
 const SESSION_COOKIE = 'arms_session';
 const SESSION_SECONDS = 60 * 60 * 12;
@@ -37,6 +46,10 @@ interface LocalDb {
   uploadHistory: any[];
   notifications: any[];
   auditLogs: any[];
+  palletReports?: any[];
+  minutesRecords?: any[];
+  palletArchive?: Record<string, any>;
+  minutesArchive?: Record<string, any>;
   loginAttempts: Record<string, { attempts: number; lockedUntil: number | null }>;
 }
 
@@ -194,6 +207,8 @@ async function getLocalDb(): Promise<LocalDb> {
         uploadHistory: [],
         notifications: [],
         auditLogs: [],
+        palletReports: [],
+        minutesRecords: [],
         loginAttempts: {},
       };
     }
@@ -826,6 +841,131 @@ async function startServer() {
           throw error;
         }
       }
+      return res.status(405).json({ error: 'Method not allowed.' });
+    } catch (error) {
+      const info = describePgError(error);
+      return res.status(info.status).json(info);
+    }
+  });
+
+  // ---- /api/modules (Pallet Reports & Minutes/Comments Archives) ----
+  app.all('/api/modules', async (req, res) => {
+    const session = readSession(req);
+    if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
+
+    try {
+      const sql = getSql();
+      if (!sql) {
+        const db = await getLocalDb();
+        const user = db.users.find(u => u.id === session.sub);
+        if (!user || !user.active) return res.status(401).json({ error: 'الحساب غير نشط أو لم يعد موجوداً.' });
+        const emptyStore = () => ({ boxes: [], dossiers: [], projects: [], uploadHistory: [], notifications: [] });
+
+        if (req.method === 'GET') {
+          return res.json({
+            palletReports: Array.isArray(db.palletReports) ? db.palletReports : [],
+            minutesRecords: Array.isArray(db.minutesRecords) ? db.minutesRecords : [],
+            palletArchive: db.palletArchive && typeof db.palletArchive === 'object' ? db.palletArchive : emptyStore(),
+            minutesArchive: db.minutesArchive && typeof db.minutesArchive === 'object' ? db.minutesArchive : emptyStore(),
+          });
+        }
+
+        if (req.method === 'PUT') {
+          if (!['System Admin', 'Archive Manager', 'Data Entry'].includes(user.role)) {
+            return res.status(403).json({ error: 'ليس لديك صلاحية تعديل سجلات الباليت أو المحاضر.' });
+          }
+          const body = req.body || {};
+          if (body.palletReports !== undefined) {
+            if (!Array.isArray(body.palletReports)) {
+              return res.status(400).json({ error: 'Invalid palletReports payload.' });
+            }
+            db.palletReports = body.palletReports;
+          }
+          if (body.minutesRecords !== undefined) {
+            if (!Array.isArray(body.minutesRecords)) {
+              return res.status(400).json({ error: 'Invalid minutesRecords payload.' });
+            }
+            db.minutesRecords = body.minutesRecords;
+          }
+          for (const key of ['palletArchive', 'minutesArchive'] as const) {
+            if (body[key] !== undefined) {
+              const store = body[key];
+              if (!store || typeof store !== 'object' || !Array.isArray(store.boxes) || !Array.isArray(store.dossiers) || !Array.isArray(store.projects)) {
+                return res.status(400).json({ error: `Invalid ${key} payload.` });
+              }
+              db[key] = store;
+            }
+          }
+          saveLocalDb(db);
+          return res.json({ ok: true, updatedAt: new Date().toISOString() });
+        }
+
+        return res.status(405).json({ error: 'Method not allowed.' });
+      }
+
+      const userRows = await sql`SELECT id, role, active FROM arms_users WHERE id = ${session.sub} LIMIT 1`;
+      const user = userRows[0];
+      if (!user || !user.active) return res.status(401).json({ error: 'الحساب غير نشط أو لم يعد موجوداً.' });
+
+      await sql`CREATE TABLE IF NOT EXISTS arms_module_records (
+        module_key TEXT PRIMARY KEY,
+        data JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+
+      if (req.method === 'GET') {
+        const rows = await sql`SELECT module_key, data::text AS data_text FROM arms_module_records WHERE module_key IN ('palletReports', 'minutesRecords', 'palletArchive', 'minutesArchive')`;
+        const emptyStore = () => ({ boxes: [], dossiers: [], projects: [], uploadHistory: [], notifications: [] });
+        const map: Record<string, any> = {
+          palletReports: [],
+          minutesRecords: [],
+          palletArchive: emptyStore(),
+          minutesArchive: emptyStore(),
+        };
+        for (const r of rows) {
+          try {
+            map[r.module_key] = JSON.parse(r.data_text || (r.module_key.endsWith('Archive') ? '{}' : '[]'));
+          } catch {
+            map[r.module_key] = r.module_key.endsWith('Archive') ? emptyStore() : [];
+          }
+        }
+        return res.json(map);
+      }
+
+      if (req.method === 'PUT') {
+        if (!['System Admin', 'Archive Manager', 'Data Entry'].includes(user.role)) {
+          return res.status(403).json({ error: 'ليس لديك صلاحية تعديل سجلات الباليت أو المحاضر.' });
+        }
+        const body = req.body || {};
+        if (body.palletReports !== undefined) {
+          if (!Array.isArray(body.palletReports)) return res.status(400).json({ error: 'Invalid palletReports payload.' });
+          const payload = JSON.stringify(body.palletReports);
+          await sql`INSERT INTO arms_module_records (module_key, data, updated_at)
+            VALUES ('palletReports', ${payload}::text::jsonb, NOW())
+            ON CONFLICT (module_key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
+        }
+        if (body.minutesRecords !== undefined) {
+          if (!Array.isArray(body.minutesRecords)) return res.status(400).json({ error: 'Invalid minutesRecords payload.' });
+          const payload = JSON.stringify(body.minutesRecords);
+          await sql`INSERT INTO arms_module_records (module_key, data, updated_at)
+            VALUES ('minutesRecords', ${payload}::text::jsonb, NOW())
+            ON CONFLICT (module_key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
+        }
+        for (const key of ['palletArchive', 'minutesArchive'] as const) {
+          if (body[key] !== undefined) {
+            const store = body[key];
+            if (!store || typeof store !== 'object' || !Array.isArray(store.boxes) || !Array.isArray(store.dossiers) || !Array.isArray(store.projects)) {
+              return res.status(400).json({ error: `Invalid ${key} payload.` });
+            }
+            const payload = JSON.stringify(store);
+            await sql`INSERT INTO arms_module_records (module_key, data, updated_at)
+              VALUES (${key}, ${payload}::text::jsonb, NOW())
+              ON CONFLICT (module_key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
+          }
+        }
+        return res.json({ ok: true, updatedAt: new Date().toISOString() });
+      }
+
       return res.status(405).json({ error: 'Method not allowed.' });
     } catch (error) {
       const info = describePgError(error);

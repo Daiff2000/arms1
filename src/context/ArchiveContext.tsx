@@ -15,9 +15,29 @@ import {
   ProjectStatus,
   ArchiveSearchItem,
   SearchEntityType,
+  WorkspaceModule,
+  WorkspaceArchiveStore,
+  PalletReport,
+  MinutesRecord,
 } from '../types';
 import { buildBoxStructure } from '../utils/archiveCalculations';
 import { apiFetch, errorFrom, loadArchiveSnapshot, setSessionToken } from '../utils/archiveApi';
+
+const createEmptyWorkspaceStore = (): WorkspaceArchiveStore => ({
+  boxes: [],
+  dossiers: [],
+  projects: [],
+  uploadHistory: [],
+  notifications: [],
+});
+
+const normalizeWorkspaceStore = (raw: any): WorkspaceArchiveStore => ({
+  boxes: Array.isArray(raw?.boxes) ? raw.boxes : [],
+  dossiers: Array.isArray(raw?.dossiers) ? raw.dossiers : [],
+  projects: Array.isArray(raw?.projects) ? raw.projects : [],
+  uploadHistory: Array.isArray(raw?.uploadHistory) ? raw.uploadHistory : [],
+  notifications: Array.isArray(raw?.notifications) ? raw.notifications : [],
+});
 
 export interface ToastMessage {
   id: string;
@@ -55,6 +75,15 @@ interface ArchiveContextType {
   uploadHistory: UploadRecord[];
   notifications: NotificationItem[];
   auditLogs: AuditLogEntry[];
+  palletReports: PalletReport[];
+  minutesRecords: MinutesRecord[];
+  palletArchive: WorkspaceArchiveStore;
+  minutesArchive: WorkspaceArchiveStore;
+  operationsArchive: WorkspaceArchiveStore;
+  activeWorkspace: WorkspaceModule | null;
+  setActiveWorkspace: (workspace: WorkspaceModule | null) => void;
+  savePalletReports: (next: PalletReport[]) => Promise<void>;
+  saveMinutesRecords: (next: MinutesRecord[]) => Promise<void>;
   language: 'ar' | 'en';
   setLanguage: (lang: 'ar' | 'en') => void;
   setCurrentUser: (user: User) => void;
@@ -63,6 +92,7 @@ interface ArchiveContextType {
     fileName: string,
     targetBoxCode?: string
   ) => { importedCount: number; duplicateCount: number; newBoxesCreated: number; rejectedCount: number };
+  commitMinutesPlan: (store: WorkspaceArchiveStore, summary: string) => boolean;
   createBox: (boxCode: string, firstJobId: number) => Box;
   forceCloseBox: (boxId: string, reason: string) => boolean;
   reopenBox: (boxId: string) => boolean;
@@ -101,16 +131,78 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [archiveLoadError, setArchiveLoadError] = useState('');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [boxes, setBoxes] = useState<Box[]>([]);
-  const [dossiers, setDossiers] = useState<Dossier[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [uploadHistory, setUploadHistory] = useState<UploadRecord[]>([]);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [opBoxes, setOpBoxes] = useState<Box[]>([]);
+  const [opDossiers, setOpDossiers] = useState<Dossier[]>([]);
+  const [opProjects, setOpProjects] = useState<Project[]>([]);
+  const [opUploadHistory, setOpUploadHistory] = useState<UploadRecord[]>([]);
+  const [opNotifications, setOpNotifications] = useState<NotificationItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [palletReports, setPalletReports] = useState<PalletReport[]>([]);
+  const [minutesRecords, setMinutesRecords] = useState<MinutesRecord[]>([]);
+  const [palletArchive, setPalletArchive] = useState<WorkspaceArchiveStore>(createEmptyWorkspaceStore);
+  const [minutesArchive, setMinutesArchive] = useState<WorkspaceArchiveStore>(createEmptyWorkspaceStore);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceModule | null>(null);
   const [language, setLanguage] = useState<'ar' | 'en'>('ar');
   const [hydrated, setHydrated] = useState(false);
   const revisionRef = useRef(0);
   const skipNextSaveRef = useRef(false);
+  const dirtyModulesRef = useRef<{ palletArchive: boolean; minutesArchive: boolean }>({
+    palletArchive: false,
+    minutesArchive: false,
+  });
+
+  const scopedMode: 'operations' | 'pallet' | 'minutes' =
+    activeWorkspace === 'pallet-archive'
+      ? 'pallet'
+      : activeWorkspace === 'minutes-archive'
+      ? 'minutes'
+      : 'operations';
+
+  const activeStore: WorkspaceArchiveStore =
+    scopedMode === 'pallet'
+      ? palletArchive
+      : scopedMode === 'minutes'
+      ? minutesArchive
+      : {
+          boxes: opBoxes,
+          dossiers: opDossiers,
+          projects: opProjects,
+          uploadHistory: opUploadHistory,
+          notifications: opNotifications,
+        };
+
+  const boxes = activeStore.boxes;
+  const dossiers = activeStore.dossiers;
+  const projects = activeStore.projects;
+  const uploadHistory = activeStore.uploadHistory;
+  const notifications = activeStore.notifications;
+
+  const updateScopedField = <K extends keyof WorkspaceArchiveStore>(
+    key: K,
+    updater: WorkspaceArchiveStore[K] | ((prev: WorkspaceArchiveStore[K]) => WorkspaceArchiveStore[K]),
+    opSetter: React.Dispatch<React.SetStateAction<WorkspaceArchiveStore[K]>>
+  ) => {
+    const apply = (prevVal: WorkspaceArchiveStore[K]) =>
+      typeof updater === 'function' ? (updater as (p: WorkspaceArchiveStore[K]) => WorkspaceArchiveStore[K])(prevVal) : updater;
+
+    if (scopedMode === 'pallet') {
+      dirtyModulesRef.current.palletArchive = true;
+      setPalletArchive(prev => ({ ...prev, [key]: apply(prev[key]) }));
+    } else if (scopedMode === 'minutes') {
+      dirtyModulesRef.current.minutesArchive = true;
+      setMinutesArchive(prev => ({ ...prev, [key]: apply(prev[key]) }));
+    } else {
+      opSetter(updater);
+    }
+  };
+
+  const setBoxes = (u: React.SetStateAction<Box[]>) => updateScopedField('boxes', u, setOpBoxes);
+  const setDossiers = (u: React.SetStateAction<Dossier[]>) => updateScopedField('dossiers', u, setOpDossiers);
+  const setProjects = (u: React.SetStateAction<Project[]>) => updateScopedField('projects', u, setOpProjects);
+  const setUploadHistory = (u: React.SetStateAction<UploadRecord[]>) =>
+    updateScopedField('uploadHistory', u, setOpUploadHistory);
+  const setNotifications = (u: React.SetStateAction<NotificationItem[]>) =>
+    updateScopedField('notifications', u, setOpNotifications);
 
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -126,14 +218,29 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setArchiveLoading(true);
     setArchiveLoadError('');
     try {
-      const parsed = await loadArchiveSnapshot();
+      const [parsed, modulesResult] = await Promise.all([
+        loadArchiveSnapshot(),
+        apiFetch<{
+          palletReports?: PalletReport[];
+          minutesRecords?: MinutesRecord[];
+          palletArchive?: WorkspaceArchiveStore;
+          minutesArchive?: WorkspaceArchiveStore;
+        }>('/api/modules', {}, 15000).catch(() => null),
+      ]);
       skipNextSaveRef.current = true;
-      setBoxes(parsed.boxes || []);
-      setDossiers(parsed.dossiers || []);
-      setProjects(parsed.projects || []);
-      setUploadHistory(parsed.uploadHistory || []);
-      setNotifications(parsed.notifications || []);
+      dirtyModulesRef.current = { palletArchive: false, minutesArchive: false };
+      setOpBoxes(parsed.boxes || []);
+      setOpDossiers(parsed.dossiers || []);
+      setOpProjects(parsed.projects || []);
+      setOpUploadHistory(parsed.uploadHistory || []);
+      setOpNotifications(parsed.notifications || []);
       setAuditLogs(parsed.auditLogs || []);
+      if (modulesResult?.ok && modulesResult.body) {
+        setPalletReports(Array.isArray(modulesResult.body.palletReports) ? modulesResult.body.palletReports : []);
+        setMinutesRecords(Array.isArray(modulesResult.body.minutesRecords) ? modulesResult.body.minutesRecords : []);
+        setPalletArchive(normalizeWorkspaceStore(modulesResult.body.palletArchive));
+        setMinutesArchive(normalizeWorkspaceStore(modulesResult.body.minutesArchive));
+      }
       setCurrentUser(parsed.currentUser || guestUser);
       setUsers(parsed.users || (parsed.currentUser ? [parsed.currentUser] : []));
       revisionRef.current = Number(parsed._revision || 0);
@@ -204,6 +311,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setStorageMode(r.body.storageMode);
     }
     setCurrentUser(r.body.user);
+    setActiveWorkspace(null);
     setAuthenticated(true);
     setHydrated(false);
     void loadArchiveState().catch(error => {
@@ -234,16 +342,56 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAuthenticated(false);
     setCurrentUser(guestUser);
     setUsers([]);
-    setBoxes([]);
-    setDossiers([]);
-    setProjects([]);
-    setUploadHistory([]);
-    setNotifications([]);
+    setOpBoxes([]);
+    setOpDossiers([]);
+    setOpProjects([]);
+    setOpUploadHistory([]);
+    setOpNotifications([]);
     setAuditLogs([]);
+    setPalletReports([]);
+    setMinutesRecords([]);
+    setPalletArchive(createEmptyWorkspaceStore());
+    setMinutesArchive(createEmptyWorkspaceStore());
+    dirtyModulesRef.current = { palletArchive: false, minutesArchive: false };
+    setActiveWorkspace(null);
     setHydrated(false);
   };
 
+  const savePalletReports = async (next: PalletReport[]) => {
+    const previous = palletReports;
+    setPalletReports(next);
+    const r = await apiFetch('/api/modules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ palletReports: next }),
+    });
+    if (!r.ok) {
+      setPalletReports(previous);
+      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ تقارير الباليت' : 'Failed saving pallet reports');
+      showToast(msg, 'error');
+      throw new Error(msg);
+    }
+  };
+
+  const saveMinutesRecords = async (next: MinutesRecord[]) => {
+    const previous = minutesRecords;
+    setMinutesRecords(next);
+    const r = await apiFetch('/api/modules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutesRecords: next }),
+    });
+    if (!r.ok) {
+      setMinutesRecords(previous);
+      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ المحاضر والتعليقات' : 'Failed saving minutes records');
+      showToast(msg, 'error');
+      throw new Error(msg);
+    }
+  };
+
   const canWrite = currentUser.role === 'System Admin' || currentUser.role === 'Archive Manager';
+  const canWriteModules = ['System Admin', 'Archive Manager', 'Data Entry'].includes(currentUser.role);
+
   useEffect(() => {
     if (!hydrated || !authenticated || !canWrite) return;
     if (skipNextSaveRef.current) {
@@ -260,11 +408,11 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
             signal: controller.signal,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              boxes,
-              dossiers,
-              projects,
-              uploadHistory,
-              notifications,
+              boxes: opBoxes,
+              dossiers: opDossiers,
+              projects: opProjects,
+              uploadHistory: opUploadHistory,
+              notifications: opNotifications,
               auditLogs,
               _revision: revisionRef.current,
             }),
@@ -293,7 +441,58 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [hydrated, authenticated, canWrite, boxes, dossiers, projects, uploadHistory, notifications, auditLogs]);
+  }, [hydrated, authenticated, canWrite, opBoxes, opDossiers, opProjects, opUploadHistory, opNotifications, auditLogs]);
+
+  useEffect(() => {
+    if (!hydrated || !authenticated || !canWriteModules) return;
+    const sendPallet = dirtyModulesRef.current.palletArchive;
+    const sendMinutes = dirtyModulesRef.current.minutesArchive;
+    if (!sendPallet && !sendMinutes) return;
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const body: Record<string, WorkspaceArchiveStore> = {};
+        if (sendPallet) body.palletArchive = palletArchive;
+        if (sendMinutes) body.minutesArchive = minutesArchive;
+
+        const r = await apiFetch(
+          '/api/modules',
+          {
+            method: 'PUT',
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+          60000
+        );
+        if (!r.ok) throw new Error(errorFrom(r, 'فشل حفظ بيانات القسم'));
+        if (sendPallet) dirtyModulesRef.current.palletArchive = false;
+        if (sendMinutes) dirtyModulesRef.current.minutesArchive = false;
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error('ARMS module archive save error:', error);
+          showToast(error instanceof Error ? error.message : 'تعذر حفظ بيانات القسم.', 'error');
+        }
+      }
+    }, 650);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [hydrated, authenticated, canWriteModules, palletArchive, minutesArchive]);
+
+  const commitMinutesPlan = (store: WorkspaceArchiveStore, summary: string): boolean => {
+    if (!['System Admin', 'Archive Manager', 'Data Entry'].includes(currentUser.role)) {
+      showToast(language === 'ar' ? 'ليس لديك صلاحية استيراد الخطة.' : 'You do not have permission to import plans.', 'error');
+      return false;
+    }
+    dirtyModulesRef.current.minutesArchive = true;
+    setMinutesArchive(normalizeWorkspaceStore(store));
+    addAuditLog('Import Plan', 'Import', 'minutes-plan', summary);
+    showToast(language === 'ar' ? 'تم استيراد الخطة وتوزيعها على الدوسيهات.' : 'Plan imported and distributed into dossiers.', 'success');
+    return true;
+  };
 
   const addAuditLog = (
     action: string,
@@ -928,11 +1127,27 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         uploadHistory,
         notifications,
         auditLogs,
+        palletReports,
+        minutesRecords,
+        palletArchive,
+        minutesArchive,
+        operationsArchive: {
+          boxes: opBoxes,
+          dossiers: opDossiers,
+          projects: opProjects,
+          uploadHistory: opUploadHistory,
+          notifications: opNotifications,
+        },
+        activeWorkspace,
+        setActiveWorkspace,
+        savePalletReports,
+        saveMinutesRecords,
         language,
         setLanguage,
         setCurrentUser,
         importExcelProjects,
         createBox,
+        commitMinutesPlan,
         forceCloseBox,
         reopenBox,
         updateProjectStatus,

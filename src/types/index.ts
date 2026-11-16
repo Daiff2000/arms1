@@ -36,6 +36,16 @@ export interface Project {
   lastUpdateDate: string;
   sourceUpload: string;
   statusHistory: StatusHistoryEntry[];
+  // Comments & Minutes plan fields (optional — only set for plan imports)
+  branchName?: string;
+  branchCode?: string;
+  shipmentNo?: number;
+  folderCount?: number; // عدد المناديل
+  region?: string;
+  wing?: string;
+  startDate?: string; // YYYY-MM-DD تاريخ بدء الأعمال التشغيلية
+  endDate?: string; // YYYY-MM-DD
+  weekStart?: string; // Sunday of the dossier week
 }
 
 export interface Dossier {
@@ -49,6 +59,9 @@ export interface Dossier {
   missingCount: number;
   pendingCount: number;
   status: DossierStatus;
+  // Comments & Minutes plan fields: one dossier = one Sun→Thu week
+  weekStart?: string; // YYYY-MM-DD (Sunday)
+  weekEnd?: string; // YYYY-MM-DD (Thursday)
 }
 
 export interface Box {
@@ -135,3 +148,78 @@ export interface ArchiveSearchItem {
   project?: Project;
 }
 
+export type WorkspaceModule =
+  | 'reports-archive'
+  | 'pallet-archive'
+  | 'minutes-archive'
+  | 'admin-audit'
+  | 'admin-users';
+
+export interface WorkspaceArchiveStore {
+  boxes: Box[];
+  dossiers: Dossier[];
+  projects: Project[];
+  uploadHistory: UploadRecord[];
+  notifications: NotificationItem[];
+}
+
+export type PalletStatus = 'Stored' | 'In Transit' | 'Dispatched' | 'Audit Hold';
+
+export interface PalletReport {
+  id: string;
+  palletCode: string;
+  warehouseZone: string;
+  linkedBoxes: string;
+  boxCount: number;
+  weightKg: number;
+  status: PalletStatus;
+  inspectionDate: string;
+  custodian: string;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MinutesCategory =
+  | 'Meeting Minutes'
+  | 'Handover Protocol'
+  | 'Technical Comment'
+  | 'Inventory Audit';
+
+export type MinutesPriority = 'Normal' | 'Important' | 'Urgent';
+
+export type MinutesStatus = 'Draft' | 'Approved' | 'Archived' | 'Needs Follow-up';
+
+export interface MinutesActionItem {
+  id: string;
+  text: string;
+  assignee: string;
+  done: boolean;
+}
+
+export interface MinutesComment {
+  id: string;
+  authorName: string;
+  authorRole: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface MinutesRecord {
+  id: string;
+  referenceCode: string;
+  title: string;
+  category: MinutesCategory;
+  priority: MinutesPriority;
+  status: MinutesStatus;
+  recordDate: string;
+  linkedRef: string;
+  attendees: string;
+  summary: string;
+  actionItems: MinutesActionItem[];
+  comments: MinutesComment[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}

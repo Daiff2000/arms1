@@ -18,7 +18,6 @@ import {
   ArrowLeft,
   FileBarChart,
   ArrowUpRight,
-  ClipboardList,
   FolderPlus,
   Layers,
   Lock,
@@ -33,11 +32,24 @@ interface DashboardViewProps {
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { boxes, dossiers, projects, uploadHistory, currentUser, language } = useArchive();
+  const { boxes, dossiers, projects, uploadHistory, currentUser, language, activeWorkspace } = useArchive();
   const [boxStatusTab, setBoxStatusTab] = useState<'all' | 'Inprogress' | 'Archived'>('all');
 
   const isAr = language === 'ar';
   const DirectionalArrow = isAr ? ArrowLeft : ArrowRight;
+
+  const workspaceTitle =
+    activeWorkspace === 'pallet-archive'
+      ? isAr
+        ? 'أرشفة تقارير تسليم الباليت'
+        : 'Pallet Handover Reports'
+      : activeWorkspace === 'minutes-archive'
+      ? isAr
+        ? 'أرشفة تعليقات ومحاضر'
+        : 'Comments & Minutes Archive'
+      : isAr
+      ? 'أرشفة تقارير التشغيل'
+      : 'Operations Reports Archive';
 
   const totalProjects = projects.length;
   const archivedProjects = projects.filter(p => p.status === 'Archived').length;
@@ -56,6 +68,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     { name: isAr ? 'مفقود' : 'Missing', value: missingProjects, color: '#E52225' },
     { name: isAr ? 'انتظار' : 'Pending', value: pendingProjects, color: '#A3A3A3' },
   ];
+  const chartPieData =
+    totalProjects > 0 ? projectStatusData : [{ name: isAr ? 'فارغ' : 'Empty', value: 1, color: '#E2E8F0' }];
 
   const sortedBoxes = [...boxes].sort((a, b) => a.firstJobId - b.firstJobId);
   const visibleBoxes = sortedBoxes.filter(b => {
@@ -84,14 +98,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       icon: Printer,
       accent: 'text-[#0B56A8] bg-[#EAF2FB] dark:bg-blue-950/60 dark:text-blue-400',
       onClick: () => onNavigate('labels'),
-    },
-    {
-      id: 'audit-entry',
-      label: isAr ? 'سجل المراجعة' : 'Audit Entry',
-      icon: ClipboardList,
-      accent: 'text-slate-700 bg-slate-100 dark:bg-neutral-900 dark:text-neutral-300',
-      onClick: () => onNavigate('audit'),
-      adminOnly: true,
     },
     {
       id: 'create-dossier',
@@ -129,6 +135,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
         <div>
+          <div className="text-[11px] font-bold text-[#0B56A8] dark:text-blue-400 mb-0.5">
+            {workspaceTitle}
+          </div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             {isAr ? 'لوحة المتابعة والتحكم' : 'Archive Operations Dashboard'}
           </h1>
@@ -448,21 +457,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <div className="relative h-48 my-2">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={projectStatusData} cx="50%" cy="50%" innerRadius={54} outerRadius={76} paddingAngle={3} dataKey="value">
-                  {projectStatusData.map((entry, index) => (
+                <Pie data={chartPieData} cx="50%" cy="50%" innerRadius={54} outerRadius={76} paddingAngle={totalProjects > 0 ? 3 : 0} dataKey="value">
+                  {chartPieData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip
-                  formatter={(val: any) => [`${val}`, '']}
-                  contentStyle={{
-                    backgroundColor: '#111111',
-                    borderColor: '#262626',
-                    color: '#fff',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                />
+                {totalProjects > 0 && (
+                  <Tooltip
+                    formatter={(val: any) => [`${val}`, '']}
+                    contentStyle={{
+                      backgroundColor: '#111111',
+                      borderColor: '#262626',
+                      color: '#fff',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                    }}
+                  />
+                )}
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">

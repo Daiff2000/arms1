@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
 import { ArchiveProvider, useArchive } from './context/ArchiveContext';
 import { TopNav, ActiveTab } from './components/navigation/TopNav';
@@ -16,23 +16,24 @@ import { ProjectsView } from './components/projects/ProjectsView';
 import { ImportDataView } from './components/import/ImportDataView';
 import { LabelsView } from './components/labels/LabelsView';
 import { ReportsView } from './components/reports/ReportsView';
-import { AuditLogView } from './components/audit/AuditLogView';
 import { NotificationsDrawer } from './components/notifications/NotificationsDrawer';
-import { UsersManagementView } from './components/users/UsersManagementView';
 import { ProfileModal } from './components/profile/ProfileModal';
 import { LoginView } from './components/auth/LoginView';
 import { IntercomLogo } from './components/common/IntercomLogo';
+import { WorkspacePortalView } from './components/portal/WorkspacePortalView';
+import { AdminWorkspaceView } from './components/portal/AdminWorkspaceView';
+import { SectionPagesView } from './components/workspace/SectionPagesView';
 
 function MainApp() {
   const {
     language,
-    currentUser,
     dossiers,
     authenticated,
     authLoading,
     archiveLoading,
     archiveLoadError,
     retryArchiveLoad,
+    activeWorkspace,
     toasts,
     dismissToast,
   } = useArchive();
@@ -48,6 +49,12 @@ function MainApp() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileInitialTab, setProfileInitialTab] = useState<'profile' | 'password'>('profile');
 
+  useEffect(() => {
+    setActiveTab('dashboard');
+    setProjectsFilter('');
+    setOpenBoxCreateModal(false);
+  }, [activeWorkspace]);
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-black flex flex-col items-center justify-center gap-4 text-sm text-slate-500 dark:text-neutral-400">
@@ -61,6 +68,82 @@ function MainApp() {
   }
 
   if (!authenticated) return <LoginView />;
+
+  const openProfileModal = (tab: 'profile' | 'password' = 'profile') => {
+    setProfileInitialTab(tab);
+    setProfileOpen(true);
+  };
+
+  const sharedOverlays = (
+    <>
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 end-4 z-50 flex flex-col gap-2 max-w-sm w-full px-4 sm:px-0 pointer-events-none">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              role="status"
+              className={`pointer-events-auto flex items-center justify-between gap-3 px-4 py-3 rounded-xl border shadow-lg text-xs font-semibold ${
+                toast.type === 'error'
+                  ? 'bg-red-50 border-red-200 text-[#E52225] dark:bg-red-950/90 dark:border-red-900 dark:text-red-200'
+                  : toast.type === 'warning'
+                  ? 'bg-amber-50 border-amber-200 text-[#B45309] dark:bg-amber-950/90 dark:border-amber-900 dark:text-amber-200'
+                  : toast.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/90 dark:border-emerald-900 dark:text-emerald-200'
+                  : 'bg-white border-slate-200 text-[#0B56A8] dark:bg-[#111111] dark:border-neutral-800 dark:text-blue-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 shrink-0" />}
+                {(toast.type === 'error' || toast.type === 'warning') && <AlertTriangle className="w-4 h-4 shrink-0" />}
+                {toast.type === 'info' && <Info className="w-4 h-4 shrink-0" />}
+                <span>{toast.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissToast(toast.id)}
+                className="p-0.5 opacity-60 hover:opacity-100"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ProfileModal
+        isOpen={profileOpen}
+        initialTab={profileInitialTab}
+        onClose={() => setProfileOpen(false)}
+      />
+    </>
+  );
+
+  if (activeWorkspace === null) {
+    return (
+      <>
+        <WorkspacePortalView onOpenProfile={openProfileModal} />
+        {sharedOverlays}
+      </>
+    );
+  }
+
+  if (activeWorkspace === 'admin-audit') {
+    return (
+      <>
+        <AdminWorkspaceView mode="audit" onOpenProfile={openProfileModal} />
+        {sharedOverlays}
+      </>
+    );
+  }
+
+  if (activeWorkspace === 'admin-users') {
+    return (
+      <>
+        <AdminWorkspaceView mode="users" onOpenProfile={openProfileModal} />
+        {sharedOverlays}
+      </>
+    );
+  }
 
   const handleNavigate = (tab: ActiveTab, param?: string) => {
     setActiveTab(tab);
@@ -79,27 +162,37 @@ function MainApp() {
 
   const getBreadcrumbs = () => {
     const isAr = language === 'ar';
+    const workspaceRoot =
+      activeWorkspace === 'pallet-archive'
+        ? isAr
+          ? 'أرشفة تقارير تسليم الباليت'
+          : 'Pallet Handover Reports'
+        : activeWorkspace === 'minutes-archive'
+        ? isAr
+          ? 'أرشفة تعليقات ومحاضر'
+          : 'Comments & Minutes Archive'
+        : isAr
+        ? 'أرشفة تقارير التشغيل'
+        : 'Operations Reports';
+    const homeCrumb = { label: `${workspaceRoot} · ${isAr ? 'الرئيسية' : 'Dashboard'}`, tab: 'dashboard' as ActiveTab };
+
     switch (activeTab) {
+      case 'archive':
+        return [homeCrumb, { label: isAr ? 'الأرشيف' : 'Archive' }];
       case 'boxes':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'البوكسات' : 'Boxes' },
-        ];
+        return [homeCrumb, { label: isAr ? 'البوكسات' : 'Boxes' }];
       case 'box-detail':
         return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
+          homeCrumb,
           { label: isAr ? 'البوكسات' : 'Boxes', tab: 'boxes' as ActiveTab },
           { label: `Box ${selectedBoxId}` },
         ];
       case 'dossiers':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'الدوسيهات' : 'Dossiers' },
-        ];
+        return [homeCrumb, { label: isAr ? 'الدوسيهات' : 'Dossiers' }];
       case 'dossier-detail': {
         const d = dossiers.find(x => x.id === selectedDossierId);
         return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
+          homeCrumb,
           { label: isAr ? 'البوكسات' : 'Boxes', tab: 'boxes' as ActiveTab },
           {
             label: `Box ${d?.boxId || selectedBoxId}`,
@@ -111,35 +204,16 @@ function MainApp() {
       }
       case 'projects':
         return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
+          homeCrumb,
           { label: isAr ? 'المشاريع' : 'Projects' },
           ...(projectsFilter ? [{ label: projectsFilter }] : []),
         ];
       case 'reports':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'التقارير' : 'Reports' },
-        ];
+        return [homeCrumb, { label: isAr ? 'التقارير' : 'Reports' }];
       case 'labels':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'طباعة الليبلات' : 'Labels Printing' },
-        ];
+        return [homeCrumb, { label: isAr ? 'طباعة الليبلات' : 'Labels Printing' }];
       case 'import':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'استيراد البيانات' : 'Import Excel' },
-        ];
-      case 'audit':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'سجل العمليات' : 'Audit Log' },
-        ];
-      case 'users':
-        return [
-          { label: isAr ? 'الرئيسية' : 'Dashboard', tab: 'dashboard' as ActiveTab },
-          { label: isAr ? 'المستخدمين والصلاحيات' : 'Users & Permissions' },
-        ];
+        return [homeCrumb, { label: isAr ? 'استيراد البيانات' : 'Import Excel' }];
       default:
         return [];
     }
@@ -189,51 +263,53 @@ function MainApp() {
       )}
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
+        {activeWorkspace === 'pallet-archive' || activeWorkspace === 'minutes-archive' ? (
+          <SectionPagesView workspace={activeWorkspace} activeTab={activeTab} onNavigate={handleNavigate} />
+        ) : (
+          <>
+            {activeTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
 
-        {activeTab === 'boxes' && (
-          <BoxesView
-            onNavigate={handleNavigate}
-            onSelectBox={boxId => setSelectedBoxId(boxId)}
-            initialOpenCreate={openBoxCreateModal}
-            onCreateModalConsumed={() => setOpenBoxCreateModal(false)}
-          />
+            {activeTab === 'boxes' && (
+              <BoxesView
+                onNavigate={handleNavigate}
+                onSelectBox={boxId => setSelectedBoxId(boxId)}
+                initialOpenCreate={openBoxCreateModal}
+                onCreateModalConsumed={() => setOpenBoxCreateModal(false)}
+              />
+            )}
+
+            {activeTab === 'box-detail' && (
+              <BoxDetailView
+                boxId={selectedBoxId}
+                onNavigate={handleNavigate}
+                onSelectDossier={dossierId => setSelectedDossierId(dossierId)}
+              />
+            )}
+
+            {activeTab === 'dossiers' && (
+              <DossiersView onNavigate={handleNavigate} onSelectDossier={dossierId => setSelectedDossierId(dossierId)} />
+            )}
+
+            {activeTab === 'dossier-detail' && (
+              <DossierDetailView
+                dossierId={selectedDossierId}
+                onNavigate={handleNavigate}
+                onSelectProject={jobId => {
+                  setProjectsFilter(String(jobId));
+                  setActiveTab('projects');
+                }}
+              />
+            )}
+
+            {activeTab === 'projects' && <ProjectsView initialFilter={projectsFilter} />}
+
+            {activeTab === 'import' && <ImportDataView onNavigate={handleNavigate} />}
+
+            {activeTab === 'labels' && <LabelsView initialBoxCode={labelInitialBoxCode} />}
+
+            {activeTab === 'reports' && <ReportsView />}
+          </>
         )}
-
-        {activeTab === 'box-detail' && (
-          <BoxDetailView
-            boxId={selectedBoxId}
-            onNavigate={handleNavigate}
-            onSelectDossier={dossierId => setSelectedDossierId(dossierId)}
-          />
-        )}
-
-        {activeTab === 'dossiers' && (
-          <DossiersView onNavigate={handleNavigate} onSelectDossier={dossierId => setSelectedDossierId(dossierId)} />
-        )}
-
-        {activeTab === 'dossier-detail' && (
-          <DossierDetailView
-            dossierId={selectedDossierId}
-            onNavigate={handleNavigate}
-            onSelectProject={jobId => {
-              setProjectsFilter(String(jobId));
-              setActiveTab('projects');
-            }}
-          />
-        )}
-
-        {activeTab === 'projects' && <ProjectsView initialFilter={projectsFilter} />}
-
-        {activeTab === 'import' && <ImportDataView onNavigate={handleNavigate} />}
-
-        {activeTab === 'labels' && <LabelsView initialBoxCode={labelInitialBoxCode} />}
-
-        {activeTab === 'reports' && <ReportsView />}
-
-        {activeTab === 'audit' && currentUser.role === 'System Admin' && <AuditLogView />}
-
-        {activeTab === 'users' && <UsersManagementView onNavigate={handleNavigate} />}
       </main>
 
       <footer className="border-t border-slate-200 dark:border-neutral-800 bg-white dark:bg-[#111111] py-4 text-xs text-slate-500 dark:text-neutral-400">
