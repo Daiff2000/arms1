@@ -129,6 +129,8 @@ export interface LabelData {
   totalDossiers?: number; // 6
   fromJobId: number;
   toJobId: number;
+  fromLabel?: string; // optional override label text (e.g. "15/11/26")
+  toLabel?: string; // optional override label text (e.g. "19/11/26")
 }
 
 export type SearchEntityType = 'box' | 'dossier' | 'project';

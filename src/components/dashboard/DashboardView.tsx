@@ -45,8 +45,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         : 'Pallet Handover Reports'
       : activeWorkspace === 'minutes-archive'
       ? isAr
-        ? 'أرشفة تعليقات ومحاضر'
-        : 'Comments & Minutes Archive'
+        ? 'أرشفة التعليقات'
+        : 'Comments Archive'
       : isAr
       ? 'أرشفة تقارير التشغيل'
       : 'Operations Reports Archive';

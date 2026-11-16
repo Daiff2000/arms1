@@ -6,7 +6,7 @@
 
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
-import { LabelData } from '../types';
+import { Dossier, LabelData } from '../types';
 import logoDark from '../assets/logo-dark.png?inline';
 import armsLogoDark from '../assets/arms-logo-dark.png?inline';
 
@@ -18,14 +18,82 @@ const ARMS_H = 6.6;
 const ARMS_W = ARMS_H * (600 / 166);
 export const LABEL_ARMS_LOGO = { src: armsLogoDark, x: 94.0 - ARMS_W, y: 3.9, h: ARMS_H, w: ARMS_W } as const;
 
+/** Format ISO date string (YYYY-MM-DD) as DD/MM/YY for thermal label FROM/TO fields. */
+export function formatShortLabelDate(iso?: string | null): string {
+  if (!iso) return '—';
+  const clean = iso.slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length !== 3) return clean;
+  return `${parts[2]}/${parts[1]}/${parts[0].slice(-2)}`;
+}
+
+/** Cache for pure-white monochrome thermal label logos (B&W print clarity) */
+let monochromeLogosPromise: Promise<{ intercomSrc: string; armsSrc: string }> | null = null;
+
+function convertToPureWhitePng(src: string): Promise<string> {
+  return new Promise(resolve => {
+    if (typeof document === 'undefined') {
+      resolve(src);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = Math.max(1, img.naturalWidth * 2);
+        const h = Math.max(1, img.naturalHeight * 2);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(src);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const px = imgData.data;
+        for (let i = 0; i < px.length; i += 4) {
+          const a = px[i + 3];
+          if (a > 24) {
+            px[i] = 255;
+            px[i + 1] = 255;
+            px[i + 2] = 255;
+            px[i + 3] = a >= 110 ? 255 : a;
+          } else {
+            px[i + 3] = 0;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve(src);
+      }
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
+}
+
+export function getMonochromeLabelLogos(): Promise<{ intercomSrc: string; armsSrc: string }> {
+  if (!monochromeLogosPromise) {
+    monochromeLogosPromise = Promise.all([
+      convertToPureWhitePng(LABEL_LOGO.src),
+      convertToPureWhitePng(LABEL_ARMS_LOGO.src),
+    ]).then(([intercomSrc, armsSrc]) => ({ intercomSrc, armsSrc }));
+  }
+  return monochromeLogosPromise;
+}
+
 /**
  * Generate standard QR code payload text matching the specification exactly
  */
 export function getQRCodeText(data: LabelData): string {
+  const fromVal = data.fromLabel || String(data.fromJobId);
+  const toVal = data.toLabel || String(data.toJobId);
   if (data.type === 'box') {
-    return `BOX: ${data.boxCode}\nFROM: ${data.fromJobId}\nTO: ${data.toJobId}`;
+    return `BOX: ${data.boxCode}\nFROM: ${fromVal}\nTO: ${toVal}`;
   } else {
-    return `BOX: ${data.boxCode}\nDOSSIER: ${data.dossierNumber || 1}\nOF: ${data.totalDossiers || 6}\nFROM: ${data.fromJobId}\nTO: ${data.toJobId}`;
+    return `BOX: ${data.boxCode}\nDOSSIER: ${data.dossierNumber || 1}\nOF: ${data.totalDossiers || 6}\nFROM: ${fromVal}\nTO: ${toVal}`;
   }
 }
 
@@ -96,10 +164,11 @@ export async function renderLabelOnPDF(pdf: jsPDF, data: LabelData) {
   // Fill the bottom squared corner of header bar
   pdf.rect(outerX, outerY + outerR, outerW, headerH - outerR, 'F');
 
-  // Official white-text Intercom logo (left) & ARMS logo (right) in the black header
-  pdf.addImage(LABEL_LOGO.src, 'PNG', LABEL_LOGO.x, LABEL_LOGO.y, LABEL_LOGO.w, LABEL_LOGO.h);
+  // Pure B&W (solid white on solid black) Intercom logo (left) & ARMS logo (right)
+  const { intercomSrc, armsSrc } = await getMonochromeLabelLogos();
+  pdf.addImage(intercomSrc, 'PNG', LABEL_LOGO.x, LABEL_LOGO.y, LABEL_LOGO.w, LABEL_LOGO.h);
   pdf.addImage(
-    LABEL_ARMS_LOGO.src,
+    armsSrc,
     'PNG',
     LABEL_ARMS_LOGO.x,
     LABEL_ARMS_LOGO.y,
@@ -195,6 +264,13 @@ export async function renderLabelOnPDF(pdf: jsPDF, data: LabelData) {
   pdf.setLineWidth(0.55);
   pdf.line(rangeMidX, rangeY, rangeMidX, rangeY + rangeH);
 
+  const fromText = data.fromLabel || String(data.fromJobId);
+  const toText = data.toLabel || String(data.toJobId);
+  const fromFontPt = fromText.length > 6 ? 11.2 : 16;
+  const toFontPt = toText.length > 6 ? 11.2 : 16;
+  const fromBaselineY = fromText.length > 6 ? 43.2 : 43.6;
+  const toBaselineY = toText.length > 6 ? 43.2 : 43.6;
+
   // FROM Section
   pdf.setTextColor(0, 0, 0);
   pdf.setFont('helvetica', 'bold');
@@ -202,16 +278,16 @@ export async function renderLabelOnPDF(pdf: jsPDF, data: LabelData) {
   const leftHalfCenter = rangeX + (rangeMidX - rangeX) / 2;
   pdf.text('FROM', leftHalfCenter, 38.2, { align: 'center' });
 
-  pdf.setFontSize(16);
-  pdf.text(String(data.fromJobId), leftHalfCenter, 43.6, { align: 'center' });
+  pdf.setFontSize(fromFontPt);
+  pdf.text(fromText, leftHalfCenter, fromBaselineY, { align: 'center' });
 
   // TO Section
   const rightHalfCenter = rangeMidX + (rangeX + rangeW - rangeMidX) / 2;
   pdf.setFontSize(8.0);
   pdf.text('TO', rightHalfCenter, 38.2, { align: 'center' });
 
-  pdf.setFontSize(16);
-  pdf.text(String(data.toJobId), rightHalfCenter, 43.6, { align: 'center' });
+  pdf.setFontSize(toFontPt);
+  pdf.text(toText, rightHalfCenter, toBaselineY, { align: 'center' });
 }
 
 /**
@@ -264,4 +340,60 @@ export function buildBoxLabelPackage(boxCode: string, firstJobId: number): Label
   }
 
   return labels;
+}
+
+const addDaysIso = (isoDate: string, days: number): string => {
+  const parts = isoDate.slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return isoDate;
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]) + days * 86400000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+};
+
+/**
+ * Helper to build a 7-label package for a weekly box (C-series), formatting FROM/TO as DD/MM/YY.
+ */
+export function buildWeeklyBoxLabelPackage(
+  boxCode: string,
+  boxDossiers: Dossier[],
+  fallbackWeek1Start?: string
+): LabelData[] {
+  const sorted = [...boxDossiers].sort((a, b) => a.dossierNumber - b.dossierNumber);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const firstKnownStart = sorted.find(d => d.weekStart)?.weekStart;
+  const baseStart = fallbackWeek1Start || firstKnownStart || todayIso;
+
+  const dossierLabels: LabelData[] = [];
+  for (let d = 1; d <= 6; d++) {
+    const existing = sorted.find(x => x.dossierNumber === d);
+    const wStart = existing?.weekStart || addDaysIso(baseStart, (d - 1) * 7);
+    const wEnd = existing?.weekEnd || addDaysIso(wStart, 4);
+    dossierLabels.push({
+      type: 'dossier',
+      boxCode,
+      dossierNumber: d,
+      totalDossiers: 6,
+      fromJobId: existing?.fromJobId || d,
+      toJobId: existing?.toJobId || d,
+      fromLabel: formatShortLabelDate(wStart),
+      toLabel: formatShortLabelDate(wEnd),
+    });
+  }
+
+  const boxFromIso = sorted[0]?.weekStart || baseStart;
+  const lastWithDate = [...sorted].reverse().find(d => d.weekEnd || d.weekStart);
+  const boxToIso =
+    lastWithDate?.weekEnd ||
+    (lastWithDate?.weekStart ? addDaysIso(lastWithDate.weekStart, 4) : addDaysIso(addDaysIso(baseStart, 5 * 7), 4));
+
+  const boxLabel: LabelData = {
+    type: 'box',
+    boxCode,
+    fromJobId: sorted[0]?.fromJobId || 1,
+    toJobId: sorted[sorted.length - 1]?.toJobId || 1,
+    fromLabel: formatShortLabelDate(boxFromIso),
+    toLabel: formatShortLabelDate(boxToIso),
+  };
+
+  return [boxLabel, ...dossierLabels];
 }

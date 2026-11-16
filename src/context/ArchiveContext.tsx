@@ -39,6 +39,38 @@ const normalizeWorkspaceStore = (raw: any): WorkspaceArchiveStore => ({
   notifications: Array.isArray(raw?.notifications) ? raw.notifications : [],
 });
 
+const normalizeMinutesArchiveStore = (raw: any): WorkspaceArchiveStore => {
+  const base = normalizeWorkspaceStore(raw);
+  const existingCodes = new Set(base.boxes.map(b => b.boxCode.toUpperCase()));
+  const renameMap = new Map<string, string>();
+  for (const b of base.boxes) {
+    const m = /^M(\d+)$/i.exec(b.boxCode.trim());
+    if (m) {
+      const target = `C${m[1]}`;
+      if (!existingCodes.has(target)) {
+        renameMap.set(b.boxCode, target);
+        existingCodes.add(target);
+      }
+    }
+  }
+  if (renameMap.size === 0) return base;
+  return {
+    ...base,
+    boxes: base.boxes.map(b => {
+      const nextCode = renameMap.get(b.boxCode);
+      return nextCode ? { ...b, id: nextCode, boxCode: nextCode } : b;
+    }),
+    dossiers: base.dossiers.map(d => {
+      const nextBox = renameMap.get(d.boxId);
+      return nextBox ? { ...d, boxId: nextBox, id: `${nextBox}-${d.dossierNumber}` } : d;
+    }),
+    projects: base.projects.map(p => {
+      const nextBox = renameMap.get(p.boxId);
+      return nextBox ? { ...p, boxId: nextBox } : p;
+    }),
+  };
+};
+
 export interface ToastMessage {
   id: string;
   message: string;
@@ -97,6 +129,7 @@ interface ArchiveContextType {
   forceCloseBox: (boxId: string, reason: string) => boolean;
   reopenBox: (boxId: string) => boolean;
   updateProjectStatus: (jobId: number, newStatus: ProjectStatus, note?: string) => void;
+  bulkUpdateProjectStatus: (jobIds: number[], newStatus: ProjectStatus, note?: string) => void;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   addUser: (user: Omit<User, 'id' | 'lastLogin'>, password: string) => Promise<void>;
@@ -239,7 +272,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setPalletReports(Array.isArray(modulesResult.body.palletReports) ? modulesResult.body.palletReports : []);
         setMinutesRecords(Array.isArray(modulesResult.body.minutesRecords) ? modulesResult.body.minutesRecords : []);
         setPalletArchive(normalizeWorkspaceStore(modulesResult.body.palletArchive));
-        setMinutesArchive(normalizeWorkspaceStore(modulesResult.body.minutesArchive));
+        setMinutesArchive(normalizeMinutesArchiveStore(modulesResult.body.minutesArchive));
       }
       setCurrentUser(parsed.currentUser || guestUser);
       setUsers(parsed.users || (parsed.currentUser ? [parsed.currentUser] : []));
@@ -383,7 +416,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
     if (!r.ok) {
       setMinutesRecords(previous);
-      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ المحاضر والتعليقات' : 'Failed saving minutes records');
+      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ سجلات التعليقات' : 'Failed saving comments records');
       showToast(msg, 'error');
       throw new Error(msg);
     }
@@ -488,7 +521,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return false;
     }
     dirtyModulesRef.current.minutesArchive = true;
-    setMinutesArchive(normalizeWorkspaceStore(store));
+    setMinutesArchive(normalizeMinutesArchiveStore(store));
     addAuditLog('Import Plan', 'Import', 'minutes-plan', summary);
     showToast(language === 'ar' ? 'تم استيراد الخطة وتوزيعها على الدوسيهات.' : 'Plan imported and distributed into dossiers.', 'success');
     return true;
@@ -748,79 +781,121 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return true;
   };
 
-  const updateProjectStatus = (jobId: number, newStatus: ProjectStatus, note?: string) => {
-    const project = projects.find(p => p.jobId === jobId);
-    if (!project) return;
+  const applyStatusUpdates = (targets: number[], newStatus: ProjectStatus, note?: string) => {
+    const targetSet = new Set(targets);
+    const affectedProjects = projects.filter(p => targetSet.has(p.jobId));
+    if (affectedProjects.length === 0) return;
 
-    const beforeStatus = project.status;
-    const historyEntry = {
-      status: newStatus,
-      timestamp: new Date().toLocaleString(),
-      note: note || `Manual status update by ${currentUser.name}`,
-      user: currentUser.name,
-    };
+    const now = new Date().toISOString();
+    const displayTimestamp = new Date().toLocaleString();
+    const isFixedSlots = scopedMode === 'operations';
 
-    const updatedProjects = projects.map(p =>
-      p.jobId === jobId
-        ? {
-            ...p,
-            status: newStatus,
-            lastUpdateDate: new Date().toISOString(),
-            statusHistory: [historyEntry, ...p.statusHistory],
-          }
-        : p
-    );
+    const updatedProjects = projects.map(p => {
+      if (!targetSet.has(p.jobId)) return p;
+      const historyEntry = {
+        status: newStatus,
+        timestamp: displayTimestamp,
+        note: note || `Manual status update by ${currentUser.name}`,
+        user: currentUser.name,
+      };
+      return {
+        ...p,
+        status: newStatus,
+        lastUpdateDate: now,
+        statusHistory: [historyEntry, ...(p.statusHistory || [])],
+      };
+    });
 
-    setProjects(updatedProjects);
+    const affectedBoxCodes = new Set(affectedProjects.map(p => p.boxId));
 
-    const parentBox = boxes.find(b => b.boxCode === project.boxId);
-    if (parentBox) {
-      const boxProjects = updatedProjects.filter(p => p.boxId === parentBox.boxCode);
+    const updatedDossiers = dossiers.map(d => {
+      if (!affectedBoxCodes.has(d.boxId)) return d;
+      const dProjects = updatedProjects.filter(p => p.boxId === d.boxId && p.dossierNumber === d.dossierNumber);
+      const dArch = dProjects.filter(p => p.status === 'Archived').length;
+      const dMiss = dProjects.filter(p => p.status === 'Missing').length;
+      const dPend = dProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 50 : dProjects.length;
+      const nextStatus: Dossier['status'] =
+        dProjects.length > 0 && dArch === expectedTotal
+          ? 'Archived'
+          : isFixedSlots
+          ? dArch > 0
+            ? 'Inprogress'
+            : 'Pending'
+          : dArch + dMiss > 0
+          ? 'Inprogress'
+          : 'Pending';
+      return {
+        ...d,
+        totalProjects: isFixedSlots ? d.totalProjects : dProjects.length,
+        archivedCount: dArch,
+        missingCount: dMiss,
+        pendingCount: dPend,
+        status: nextStatus,
+      };
+    });
+
+    const updatedBoxes = boxes.map(b => {
+      if (!affectedBoxCodes.has(b.boxCode)) return b;
+      const boxProjects = updatedProjects.filter(p => p.boxId === b.boxCode);
+      const boxDossiers = updatedDossiers.filter(d => d.boxId === b.boxCode);
       const boxArchived = boxProjects.filter(p => p.status === 'Archived').length;
       const boxMissing = boxProjects.filter(p => p.status === 'Missing').length;
       const boxPending = boxProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 300 : boxProjects.length;
+      return {
+        ...b,
+        totalProjects: isFixedSlots ? b.totalProjects : boxProjects.length,
+        archivedProjects: boxArchived,
+        missingProjects: boxMissing,
+        pendingProjects: boxPending,
+        completedDossiers: boxDossiers.filter(d => d.status === 'Archived').length,
+        status: boxProjects.length > 0 && boxArchived === expectedTotal ? ('Archived' as const) : ('Inprogress' as const),
+        updatedAt: now,
+      };
+    });
 
-      setBoxes(prev =>
-        prev.map(b =>
-          b.id === parentBox.id
-            ? {
-                ...b,
-                archivedProjects: boxArchived,
-                missingProjects: boxMissing,
-                pendingProjects: boxPending,
-                status: boxArchived === 300 ? 'Archived' : 'Inprogress',
-              }
-            : b
-        )
+    setProjects(updatedProjects);
+    setDossiers(updatedDossiers);
+    setBoxes(updatedBoxes);
+
+    if (affectedProjects.length === 1) {
+      const single = affectedProjects[0];
+      const label = single.branchName
+        ? `${single.branchName} (${language === 'ar' ? 'إرسالية' : 'Shipment'} #${single.shipmentNo ?? single.jobId})`
+        : `#${single.jobId}`;
+      addAuditLog(
+        'Update Project Status',
+        'Project',
+        String(single.jobId),
+        `Updated ${label} status from ${single.status} to ${newStatus}. Note: ${note || 'None'}`
       );
-
-      setDossiers(prev =>
-        prev.map(d => {
-          if (d.boxId === parentBox.boxCode) {
-            const dProjects = boxProjects.filter(p => p.dossierNumber === d.dossierNumber);
-            const dArch = dProjects.filter(p => p.status === 'Archived').length;
-            const dMiss = dProjects.filter(p => p.status === 'Missing').length;
-            const dPend = dProjects.filter(p => p.status === 'Pending').length;
-            return {
-              ...d,
-              archivedCount: dArch,
-              missingCount: dMiss,
-              pendingCount: dPend,
-              status: dArch === 50 ? 'Archived' : dArch > 0 ? 'Inprogress' : 'Pending',
-            };
-          }
-          return d;
-        })
+      showToast(
+        language === 'ar' ? `تم تحديث حالة ${label}.` : `Updated ${label}.`,
+        'success'
+      );
+    } else {
+      addAuditLog(
+        'Bulk Update Status',
+        'Project',
+        `${affectedProjects.length} items`,
+        `Updated ${affectedProjects.length} records to ${newStatus}. Note: ${note || 'None'}`
+      );
+      showToast(
+        language === 'ar'
+          ? `تم تحديث حالة ${affectedProjects.length} سجل إلى ${newStatus}.`
+          : `Updated ${affectedProjects.length} records to ${newStatus}.`,
+        'success'
       );
     }
+  };
 
-    addAuditLog(
-      'Update Project Status',
-      'Project',
-      String(jobId),
-      `Updated Job #${jobId} status from ${beforeStatus} to ${newStatus}. Note: ${note || 'None'}`
-    );
-    showToast(language === 'ar' ? `تم تحديث حالة المشروع #${jobId}.` : `Project #${jobId} updated.`, 'success');
+  const updateProjectStatus = (jobId: number, newStatus: ProjectStatus, note?: string) => {
+    applyStatusUpdates([jobId], newStatus, note);
+  };
+
+  const bulkUpdateProjectStatus = (jobIds: number[], newStatus: ProjectStatus, note?: string) => {
+    applyStatusUpdates(jobIds, newStatus, note);
   };
 
   const markNotificationAsRead = (id: string) => {
@@ -911,9 +986,22 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     };
 
+    const formatDateVariants = (isoStr?: string | null): string => {
+      if (!isoStr) return '';
+      const clean = isoStr.slice(0, 10);
+      const parts = clean.split('-');
+      if (parts.length !== 3) return clean;
+      return `${clean} ${parts[2]}/${parts[1]}/${parts[0]} ${parts[2]}/${parts[1]}/${parts[0].slice(-2)}`;
+    };
+
     const items: ArchiveSearchItem[] = [];
 
     for (const box of boxes) {
+      const boxDossiers = dossiers.filter(d => d.boxId === box.boxCode);
+      const weekDates = boxDossiers
+        .flatMap(d => [formatDateVariants(d.weekStart), formatDateVariants(d.weekEnd)])
+        .filter(Boolean)
+        .join(' ');
       const searchText = [
         box.boxCode,
         box.id,
@@ -923,6 +1011,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         String(box.firstJobId),
         String(box.lastJobId),
         `${box.firstJobId}-${box.lastJobId}`,
+        weekDates,
         statusKeywords(box.status),
         box.isForceClosed ? 'force close force closed مغلق إدارياً إغلاق إداري' : '',
         box.forceCloseReason || '',
@@ -945,6 +1034,9 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     for (const dossier of dossiers) {
+      const weekTokens = [formatDateVariants(dossier.weekStart), formatDateVariants(dossier.weekEnd)]
+        .filter(Boolean)
+        .join(' ');
       const searchText = [
         dossier.id,
         dossier.boxId,
@@ -952,10 +1044,13 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         `dossier ${dossier.dossierNumber}`,
         `دوسيه ${dossier.dossierNumber}`,
         `ملف ${dossier.dossierNumber}`,
+        `week ${dossier.dossierNumber}`,
+        `أسبوع ${dossier.dossierNumber}`,
         `${dossier.boxId} ${dossier.dossierNumber}`,
         String(dossier.fromJobId),
         String(dossier.toJobId),
         `${dossier.fromJobId}-${dossier.toJobId}`,
+        weekTokens,
         statusKeywords(dossier.status),
       ]
         .filter(Boolean)
@@ -970,7 +1065,13 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         dossierNumber: dossier.dossierNumber,
         status: dossier.status,
         searchText,
-        secondaryIds: [dossier.boxId, String(dossier.fromJobId), String(dossier.toJobId)],
+        secondaryIds: [
+          dossier.boxId,
+          String(dossier.fromJobId),
+          String(dossier.toJobId),
+          dossier.weekStart || '',
+          dossier.weekEnd || '',
+        ].filter(Boolean),
         dossier,
       });
     }
@@ -980,12 +1081,25 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const historyKeywords = (project.statusHistory || [])
         .map(h => `${h.status} ${h.note || ''} ${h.user || ''}`)
         .join(' ');
+      const shipmentToken = project.shipmentNo !== undefined ? String(project.shipmentNo) : '';
       const searchText = [
         String(project.jobId),
         `#${project.jobId}`,
         `job ${project.jobId}`,
         `project ${project.jobId}`,
         `مشروع ${project.jobId}`,
+        project.branchName || '',
+        project.branchCode || '',
+        shipmentToken,
+        shipmentToken ? `#${shipmentToken}` : '',
+        shipmentToken ? `إرسالية ${shipmentToken}` : '',
+        shipmentToken ? `shipment ${shipmentToken}` : '',
+        project.branchName ? 'فرع branch' : '',
+        project.region || '',
+        project.wing || '',
+        formatDateVariants(project.startDate),
+        formatDateVariants(project.endDate),
+        formatDateVariants(project.weekStart),
         project.boxId,
         dossierId,
         `box ${project.boxId}`,
@@ -1010,7 +1124,15 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         jobId: project.jobId,
         status: project.status,
         searchText,
-        secondaryIds: [project.boxId, dossierId, project.dateApproved || ''].filter(Boolean),
+        secondaryIds: [
+          project.boxId,
+          dossierId,
+          project.dateApproved || '',
+          project.branchName || '',
+          project.branchCode || '',
+          shipmentToken,
+          project.startDate || '',
+        ].filter(Boolean),
         project,
       });
     }
@@ -1151,6 +1273,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         forceCloseBox,
         reopenBox,
         updateProjectStatus,
+        bulkUpdateProjectStatus,
         markNotificationAsRead,
         markAllNotificationsAsRead,
         addUser,

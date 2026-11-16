@@ -587,3 +587,280 @@ export async function exportReportToPDF(opts: ReportExportOptions): Promise<stri
   pdf.save(fileName);
   return fileName;
 }
+
+export interface CommentsReportColumn {
+  key: string;
+  label: string;
+  weight?: number;
+  align?: 'start' | 'center';
+}
+
+export interface CommentsReportExportOptions {
+  reportId: 'branches' | 'dossiers' | 'summary';
+  reportTitle: string;
+  isAr: boolean;
+  columns: CommentsReportColumn[];
+  rows: Record<string, string | number>[];
+  summaryItems: { label: string; value: string }[];
+  preparedBy: string;
+  printDate: string;
+}
+
+export async function exportCommentsReportToPDF(opts: CommentsReportExportOptions): Promise<string> {
+  if (document.fonts?.ready) {
+    await document.fonts.ready;
+  }
+
+  let logoImg: HTMLImageElement | null = null;
+  let armsLogoImg: HTMLImageElement | null = null;
+  try {
+    [logoImg, armsLogoImg] = await Promise.all([loadImage(logoColor), loadImage(armsLogoLight)]);
+  } catch {
+    logoImg = await loadImage(logoColor).catch(() => null);
+    armsLogoImg = await loadImage(armsLogoLight).catch(() => null);
+  }
+
+  const W = 1260;
+  const H = 1782;
+  const M = 60;
+  const CONTENT_W = W - M * 2;
+  const ROWS_PER_PAGE = 30;
+  const ROW_H = 44;
+  const THEAD_H = 50;
+  const TABLE_TOP_Y = 260;
+
+  const pdf = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const allCols: CommentsReportColumn[] = [
+    { key: '__idx', label: '#', weight: 0.55, align: 'center' },
+    ...opts.columns,
+  ];
+  const totalWeight = allCols.reduce((sum, c) => sum + (c.weight ?? 1), 0);
+  const colWidths = allCols.map(c => ((c.weight ?? 1) / totalWeight) * CONTENT_W);
+
+  const pages = paginateReportRows(opts.rows, ROWS_PER_PAGE);
+  let globalOffset = 0;
+
+  for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+    const pageRows = pages[pageIdx];
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // White page
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, W, H);
+
+    // 1. Corporate Header (LTR fixed positions for logos)
+    ctx.direction = 'ltr';
+    if (logoImg) {
+      const logoH = 42;
+      const logoW = logoH * (logoImg.naturalWidth / Math.max(1, logoImg.naturalHeight));
+      ctx.drawImage(logoImg, M, 40, logoW, logoH);
+    } else {
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 28px "Inter", Arial, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Intercom', M, 72);
+    }
+
+    ctx.direction = opts.isAr ? 'rtl' : 'ltr';
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 26px "Cairo", "Inter", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(opts.reportTitle, W / 2, 70);
+
+    ctx.direction = 'ltr';
+    if (armsLogoImg) {
+      const armsH = 44;
+      const armsW = armsH * (armsLogoImg.naturalWidth / Math.max(1, armsLogoImg.naturalHeight));
+      ctx.drawImage(armsLogoImg, W - M - armsW, 38, armsW, armsH);
+    } else {
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 24px "Inter", Arial, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('ARMS', W - M, 70);
+    }
+
+    // 2. Metadata & Summary Box
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(M, 102, CONTENT_W, 114);
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(M, 102, CONTENT_W, 114);
+
+    ctx.direction = opts.isAr ? 'rtl' : 'ltr';
+    const sumCols = Math.max(1, opts.summaryItems.length);
+    const sumCellW = CONTENT_W / sumCols;
+    opts.summaryItems.forEach((item, idx) => {
+      const cellOrigin = opts.isAr ? W - M - idx * sumCellW - 22 : M + idx * sumCellW + 22;
+      ctx.textAlign = opts.isAr ? 'right' : 'left';
+      ctx.fillStyle = '#64748B';
+      ctx.font = 'bold 15px "Cairo", "Inter", Arial, sans-serif';
+      ctx.fillText(`${item.label}:`, cellOrigin, 134);
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 17px "Cairo", "Inter", Arial, sans-serif';
+      ctx.fillText(item.value, cellOrigin, 158);
+    });
+
+    // Meta row inside summary box (Print Date + Prepared By)
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(M, 174);
+    ctx.lineTo(W - M, 174);
+    ctx.stroke();
+
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 14.5px "Cairo", "Inter", Arial, sans-serif';
+    if (opts.isAr) {
+      ctx.textAlign = 'right';
+      ctx.fillText(`أعدّه: ${opts.preparedBy || 'مدير النظام'}`, W - M - 22, 200);
+      ctx.textAlign = 'left';
+      ctx.fillText(`تاريخ الطباعة: ${opts.printDate}`, M + 22, 200);
+    } else {
+      ctx.textAlign = 'left';
+      ctx.fillText(`Prepared By: ${opts.preparedBy || 'System Admin'}`, M + 22, 200);
+      ctx.textAlign = 'right';
+      ctx.fillText(`Print Date: ${opts.printDate}`, W - M - 22, 200);
+    }
+
+    // Divider line under metadata
+    ctx.strokeStyle = '#E52225';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(M, 234);
+    ctx.lineTo(W - M, 234);
+    ctx.stroke();
+
+    // 3. Table Header
+    ctx.fillStyle = '#D9D9D9';
+    ctx.fillRect(M, TABLE_TOP_Y, CONTENT_W, THEAD_H);
+    ctx.strokeStyle = '#94A3B8';
+    ctx.lineWidth = 1.3;
+    ctx.strokeRect(M, TABLE_TOP_Y, CONTENT_W, THEAD_H);
+
+    // Draw headers (RTL flows from right edge W-M to left; LTR from M to right)
+    let cursorX = opts.isAr ? W - M : M;
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 15.5px "Cairo", "Inter", Arial, sans-serif';
+
+    allCols.forEach((col, cIdx) => {
+      const cw = colWidths[cIdx];
+      const cellLeft = opts.isAr ? cursorX - cw : cursorX;
+
+      if (cIdx > 0) {
+        const dividerX = opts.isAr ? cursorX : cursorX;
+        ctx.beginPath();
+        ctx.moveTo(dividerX, TABLE_TOP_Y);
+        ctx.lineTo(dividerX, TABLE_TOP_Y + THEAD_H);
+        ctx.stroke();
+      }
+
+      if (col.align === 'center') {
+        ctx.textAlign = 'center';
+        ctx.fillText(truncateText(ctx, col.label, cw - 12), cellLeft + cw / 2, TABLE_TOP_Y + 31);
+      } else if (opts.isAr) {
+        ctx.textAlign = 'right';
+        ctx.fillText(truncateText(ctx, col.label, cw - 18), cellLeft + cw - 10, TABLE_TOP_Y + 31);
+      } else {
+        ctx.textAlign = 'left';
+        ctx.fillText(truncateText(ctx, col.label, cw - 18), cellLeft + 10, TABLE_TOP_Y + 31);
+      }
+
+      cursorX = opts.isAr ? cursorX - cw : cursorX + cw;
+    });
+
+    // 4. Table Rows
+    if (pageRows.length === 0) {
+      const emptyY = TABLE_TOP_Y + THEAD_H;
+      ctx.strokeStyle = '#CBD5E1';
+      ctx.strokeRect(M, emptyY, CONTENT_W, ROW_H * 1.4);
+      ctx.fillStyle = '#64748B';
+      ctx.font = '500 16px "Cairo", "Inter", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(opts.isAr ? 'لا توجد بيانات مطابقة' : 'No matching records', W / 2, emptyY + 36);
+    } else {
+      pageRows.forEach((row, rIdx) => {
+        const y = TABLE_TOP_Y + THEAD_H + rIdx * ROW_H;
+        const rowNum = globalOffset + rIdx + 1;
+
+        ctx.fillStyle = rIdx % 2 === 1 ? '#F8FAFC' : '#FFFFFF';
+        ctx.fillRect(M, y, CONTENT_W, ROW_H);
+        ctx.strokeStyle = '#CBD5E1';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(M, y, CONTENT_W, ROW_H);
+
+        let cellCursor = opts.isAr ? W - M : M;
+        allCols.forEach((col, cIdx) => {
+          const cw = colWidths[cIdx];
+          const cellLeft = opts.isAr ? cellCursor - cw : cellCursor;
+
+          if (cIdx > 0) {
+            ctx.beginPath();
+            ctx.moveTo(cellCursor, y);
+            ctx.lineTo(cellCursor, y + ROW_H);
+            ctx.stroke();
+          }
+
+          const rawVal = col.key === '__idx' ? String(rowNum) : String(row[col.key] ?? '—');
+          ctx.fillStyle = '#0F172A';
+          ctx.font =
+            col.key === '__idx' || col.align === 'center'
+              ? 'bold 15px "Inter", Arial, sans-serif'
+              : '500 15px "Cairo", "Inter", Arial, sans-serif';
+
+          if (col.align === 'center') {
+            ctx.textAlign = 'center';
+            ctx.fillText(truncateText(ctx, rawVal, cw - 12), cellLeft + cw / 2, y + 27);
+          } else if (opts.isAr) {
+            ctx.textAlign = 'right';
+            ctx.fillText(truncateText(ctx, rawVal, cw - 18), cellLeft + cw - 10, y + 27);
+          } else {
+            ctx.textAlign = 'left';
+            ctx.fillText(truncateText(ctx, rawVal, cw - 18), cellLeft + 10, y + 27);
+          }
+
+          cellCursor = opts.isAr ? cellCursor - cw : cellCursor + cw;
+        });
+      });
+    }
+
+    globalOffset += pageRows.length;
+
+    // 5. Footer
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(M, H - 56);
+    ctx.lineTo(W - M, H - 56);
+    ctx.stroke();
+
+    ctx.direction = 'ltr';
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 14px "Inter", Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Intercom ARMS · Comments Archive', M, H - 28);
+    ctx.textAlign = 'right';
+    ctx.fillText(
+      opts.isAr ? `صفحة ${pageIdx + 1} من ${pages.length}` : `Page ${pageIdx + 1} of ${pages.length}`,
+      W - M,
+      H - 28
+    );
+
+    if (pageIdx > 0) {
+      pdf.addPage('a4', 'portrait');
+    }
+    const imgData = canvas.toDataURL('image/png', 1.0);
+    pdf.addImage(imgData, 'PNG', 0, 0, 210, 297);
+  }
+
+  const fileName = `ARMS_Comments_${opts.reportId}_${new Date().toISOString().slice(0, 10)}.pdf`;
+  pdf.save(fileName);
+  return fileName;
+}

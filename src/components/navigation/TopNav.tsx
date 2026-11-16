@@ -90,6 +90,8 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const isOperations = activeWorkspace !== 'pallet-archive' && activeWorkspace !== 'minutes-archive';
   const isPallet = activeWorkspace === 'pallet-archive';
+  const isMinutes = activeWorkspace === 'minutes-archive';
+  const hasArchiveHierarchy = isOperations || isMinutes;
 
   const isArchiveActive =
     activeTab === 'archive' ||
@@ -232,7 +234,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'الرئيسية' : 'Dashboard'}</span>
             </button>
 
-            {isOperations ? (
+            {hasArchiveHierarchy ? (
               <div className="relative" ref={archiveRef}>
                 <button
                   type="button"
@@ -249,7 +251,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                 </button>
 
               {archiveDropdownOpen && (
-                <div className="absolute top-full start-0 mt-1.5 w-60 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-xl py-2 z-50">
+                <div className="absolute top-full start-0 mt-1.5 w-64 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-xl py-2 z-50">
                   <div className="px-3 py-1 text-[10px] font-bold text-slate-400">
                     {language === 'ar' ? 'أقسام الأرشيف' : 'Archive Sections'}
                   </div>
@@ -262,17 +264,31 @@ export const TopNav: React.FC<TopNavProps> = ({
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs text-start transition-colors ${
                       activeTab === 'boxes' || activeTab === 'box-detail'
-                        ? 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
+                        ? isMinutes
+                          ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
                   >
-                    <div className="w-7 h-7 rounded-lg bg-[#EAF2FB] dark:bg-[#0B56A8]/25 text-[#0B56A8] dark:text-blue-400 flex items-center justify-center shrink-0">
+                    <div
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                        isMinutes
+                          ? 'bg-red-50 dark:bg-red-950/50 text-[#E52225] dark:text-red-400'
+                          : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/25 text-[#0B56A8] dark:text-blue-400'
+                      }`}
+                    >
                       <Archive className="w-4 h-4" />
                     </div>
                     <div>
                       <div className="font-bold">{language === 'ar' ? 'البوكسات (Boxes)' : 'Boxes'}</div>
                       <div className="text-[10px] text-slate-400">
-                        {language === 'ar' ? '6 دوسيهات · 300 مشروع' : '6 Dossiers · 300 Projects'}
+                        {isMinutes
+                          ? language === 'ar'
+                            ? '6 دوسيهات (أسابيع)'
+                            : '6 Dossiers (Weeks)'
+                          : language === 'ar'
+                          ? '6 دوسيهات · 300 مشروع'
+                          : '6 Dossiers · 300 Projects'}
                       </div>
                     </div>
                   </button>
@@ -285,7 +301,9 @@ export const TopNav: React.FC<TopNavProps> = ({
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs text-start transition-colors ${
                       activeTab === 'dossiers' || activeTab === 'dossier-detail'
-                        ? 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
+                        ? isMinutes
+                          ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
                   >
@@ -295,7 +313,13 @@ export const TopNav: React.FC<TopNavProps> = ({
                     <div>
                       <div className="font-bold">{language === 'ar' ? 'الدوسيهات (Dossiers)' : 'Dossiers'}</div>
                       <div className="text-[10px] text-slate-400">
-                        {language === 'ar' ? '50 مشروع لكل دوسيه' : '50 Projects per Dossier'}
+                        {isMinutes
+                          ? language === 'ar'
+                            ? 'دوسيه واحد لكل أسبوع'
+                            : 'One Week per Dossier'
+                          : language === 'ar'
+                          ? '50 مشروع لكل دوسيه'
+                          : '50 Projects per Dossier'}
                       </div>
                     </div>
                   </button>
@@ -308,7 +332,9 @@ export const TopNav: React.FC<TopNavProps> = ({
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs text-start transition-colors ${
                       activeTab === 'projects'
-                        ? 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
+                        ? isMinutes
+                          ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
                   >
@@ -316,8 +342,22 @@ export const TopNav: React.FC<TopNavProps> = ({
                       <FileText className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="font-bold">{language === 'ar' ? 'المشاريع (Projects)' : 'Projects Directory'}</div>
-                      <div className="text-[10px] text-slate-400">Job ID & Date Approved</div>
+                      <div className="font-bold">
+                        {isMinutes
+                          ? language === 'ar'
+                            ? 'الفروع (Branches)'
+                            : 'Branches'
+                          : language === 'ar'
+                          ? 'المشاريع (Projects)'
+                          : 'Projects Directory'}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {isMinutes
+                          ? language === 'ar'
+                            ? 'اسم الفرع · الإرسالية · تاريخ التشغيل'
+                            : 'Branch · Shipment · Start Date'
+                          : 'Job ID & Date Approved'}
+                      </div>
                     </div>
                   </button>
                 </div>
@@ -358,7 +398,8 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'طباعة الليبلات' : 'Labels'}</span>
             </button>
 
-            {['System Admin', 'Archive Manager'].includes(currentUser.role) && (
+            {(['System Admin', 'Archive Manager'].includes(currentUser.role) ||
+              (isMinutes && currentUser.role === 'Data Entry')) && (
               <button
                 type="button"
                 onClick={() => onNavigate('import')}
@@ -505,7 +546,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'الرئيسية' : 'Dashboard'}</span>
             </button>
 
-            {isOperations ? (
+            {hasArchiveHierarchy ? (
               <>
                 <button
                   onClick={() => onNavigate('boxes')}
@@ -540,7 +581,15 @@ export const TopNav: React.FC<TopNavProps> = ({
                   }`}
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  <span>{language === 'ar' ? 'المشاريع' : 'Projects'}</span>
+                  <span>
+                    {isMinutes
+                      ? language === 'ar'
+                        ? 'الفروع'
+                        : 'Branches'
+                      : language === 'ar'
+                      ? 'المشاريع'
+                      : 'Projects'}
+                  </span>
                 </button>
               </>
             ) : (
@@ -581,7 +630,8 @@ export const TopNav: React.FC<TopNavProps> = ({
               <span>{language === 'ar' ? 'الليبلات' : 'Labels'}</span>
             </button>
 
-            {['System Admin', 'Archive Manager'].includes(currentUser.role) && (
+            {(['System Admin', 'Archive Manager'].includes(currentUser.role) ||
+              (isMinutes && currentUser.role === 'Data Entry')) && (
               <button
                 onClick={() => onNavigate('import')}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${

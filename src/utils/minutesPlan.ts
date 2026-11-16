@@ -14,6 +14,7 @@ export interface PlanRow {
   wing: string;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD or ''
+  status?: 'Archived' | 'Missing' | 'Pending';
 }
 
 export interface ParseResult {
@@ -73,6 +74,14 @@ export const isWeekend = (isoDate: string) => {
   return dow === 5 || dow === 6;
 };
 
+function parseRowStatus(raw: unknown): 'Archived' | 'Missing' | 'Pending' {
+  const v = norm(raw).toLowerCase();
+  if (!v) return 'Pending';
+  if (v.includes('archiv') || v.includes('مؤرشف') || v.includes('مكتمل') || v === 'تم' || v === 'yes') return 'Archived';
+  if (v.includes('miss') || v.includes('مفقود') || v.includes('ناقص')) return 'Missing';
+  return 'Pending';
+}
+
 /** Finds the plan sheet by its header names (not by sheet name) and extracts rows. */
 export function parsePlanWorkbook(wb: XLSX.WorkBook): ParseResult {
   for (const sheetName of wb.SheetNames) {
@@ -81,15 +90,22 @@ export function parsePlanWorkbook(wb: XLSX.WorkBook): ParseResult {
     for (let h = 0; h < Math.min(matrix.length, 10); h++) {
       const header = (matrix[h] || []).map(norm);
       const find = (pred: (t: string) => boolean) => header.findIndex(t => t && pred(t));
-      const cName = find(t => t.includes('اسم الفرع'));
-      const cShip = find(t => t.includes('رقم الارسالية'));
-      const cFold = find(t => t.includes('عدد المناديل'));
-      const cStart = find(t => t.includes('تاريخ بدء'));
-      if ([cName, cShip, cFold, cStart].some(c => c < 0)) continue;
+      const cName = find(t => t.includes('اسم الفرع') || t === 'الفرع' || t.toLowerCase() === 'branch name');
+      const cShip = find(t => t.includes('رقم الارسالية') || t.includes('الارسالية') || t.toLowerCase().includes('shipment'));
+      const cStart = find(
+        t =>
+          t.includes('تاريخ بدء') ||
+          t.includes('تاريخ التشغيل') ||
+          t.includes('بداية التشغيل') ||
+          t.toLowerCase().includes('start date')
+      );
+      if ([cName, cShip, cStart].some(c => c < 0)) continue;
+      const cFold = find(t => t.includes('عدد المناديل') || t.includes('المناديل'));
       const cCode = find(t => t.includes('كود الفرع'));
-      const cRegion = find(t => t === 'المنطقة');
-      const cWing = find(t => t === 'الجناح');
-      const cEnd = find(t => t.includes('تاريخ نهاية'));
+      const cRegion = find(t => t === 'المنطقة' || t.includes('المنطقة'));
+      const cWing = find(t => t === 'الجناح' || t.includes('الجناح'));
+      const cEnd = find(t => t.includes('تاريخ نهاية') || t.includes('تاريخ الانتهاء'));
+      const cStatus = find(t => t === 'الحالة' || t.includes('حالة الارشفة') || t.toLowerCase() === 'status');
 
       const rows: PlanRow[] = [];
       const rejected: ParseResult['rejected'] = [];
@@ -101,7 +117,7 @@ export function parsePlanWorkbook(wb: XLSX.WorkBook): ParseResult {
         total++;
         const start = toIsoDate(line[cStart]);
         const ship = parseInt(String(line[cShip] ?? '').trim(), 10);
-        const folders = parseInt(String(line[cFold] ?? '').trim(), 10);
+        const folders = cFold >= 0 ? parseInt(String(line[cFold] ?? '').trim(), 10) : 0;
         if (!name) { rejected.push({ sourceRow: r + 1, reason: 'اسم الفرع فارغ' }); continue; }
         if (!Number.isFinite(ship)) { rejected.push({ sourceRow: r + 1, reason: 'رقم الارسالية غير صالح' }); continue; }
         if (!start) { rejected.push({ sourceRow: r + 1, reason: 'تاريخ البدء غير صالح' }); continue; }
@@ -115,12 +131,13 @@ export function parsePlanWorkbook(wb: XLSX.WorkBook): ParseResult {
           wing: cWing >= 0 ? norm(line[cWing]) : '',
           startDate: start,
           endDate: (cEnd >= 0 && toIsoDate(line[cEnd])) || '',
+          status: cStatus >= 0 ? parseRowStatus(line[cStatus]) : 'Pending',
         });
       }
       return { sheetName, rows, rejected, totalRows: total };
     }
   }
-  throw new Error('لم يتم العثور على شيت الخطة (أعمدة: اسم الفرع / رقم الارسالية / عدد المناديل / تاريخ بدء الاعمال التشغيلية).');
+  throw new Error('لم يتم العثور على شيت الخطة (الأعمدة المطلوبة: اسم الفرع / رقم الإرسالية / تاريخ بدء التشغيل).');
 }
 
 export interface PlanWeekPreview {
@@ -142,7 +159,8 @@ export interface PlanBuild {
   warnings: string[];
 }
 
-const dupKey = (code: string, name: string, ship: number, start: string) => `${code || name}|${ship}|${start}`;
+// A branch name can repeat across rows; shipmentNo distinguishes each branch dispatch.
+const dupKey = (name: string, ship: number, start: string) => `${norm(name)}|${ship}|${start}`;
 
 /**
  * Groups rows into Sun→Thu weeks, one dossier per week, 6 dossiers per box.
@@ -160,7 +178,7 @@ export function buildMinutesPlan(
   const projects: Project[] = [...existing.projects];
   const warnings: string[] = [];
 
-  const seen = new Set(projects.map(p => dupKey(p.branchCode || '', p.branchName || '', p.shipmentNo ?? 0, p.startDate || '')));
+  const seen = new Set(projects.map(p => dupKey(p.branchName || p.branchCode || '', p.shipmentNo ?? 0, p.startDate || '')));
   let nextJobId = projects.reduce((m, p) => Math.max(m, p.jobId), 0) + 1;
 
   // 1) dedupe + bucket by week
@@ -169,7 +187,7 @@ export function buildMinutesPlan(
   let weekendCount = 0;
   const sorted = [...rows].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.sourceRow - b.sourceRow);
   for (const r of sorted) {
-    const k = dupKey(r.branchCode, r.branchName, r.shipmentNo, r.startDate);
+    const k = dupKey(r.branchName, r.shipmentNo, r.startDate);
     if (seen.has(k)) { duplicateCount++; continue; }
     seen.add(k);
     if (isWeekend(r.startDate)) weekendCount++;
@@ -225,10 +243,11 @@ export function buildMinutesPlan(
     let folders = 0;
     const list = buckets.get(wk)!;
     for (const r of list) {
+      const rowStatus = r.status || 'Pending';
       projects.push({
-        jobId: nextJobId++, dateApproved: null, status: 'Pending', boxId: d.boxId, dossierNumber: d.dossierNumber,
+        jobId: nextJobId++, dateApproved: r.startDate, status: rowStatus, boxId: d.boxId, dossierNumber: d.dossierNumber,
         slotIndex: slot++, firstImportDate: now, lastUpdateDate: now, sourceUpload: opts.fileName,
-        statusHistory: [{ status: 'Pending', timestamp: now, note: 'Imported from plan', user: opts.userName }],
+        statusHistory: [{ status: rowStatus, timestamp: now, note: 'Imported from plan', user: opts.userName }],
         branchName: r.branchName, branchCode: r.branchCode, shipmentNo: r.shipmentNo, folderCount: r.folderCount,
         region: r.region, wing: r.wing, startDate: r.startDate, endDate: r.endDate, weekStart: wk,
       });
@@ -260,6 +279,7 @@ export function buildMinutesPlan(
     b.missingProjects = ps.filter(p => p.status === 'Missing').length;
     b.pendingProjects = ps.filter(p => p.status === 'Pending').length;
     b.completedDossiers = ds.filter(d => d.status === 'Archived').length;
+    b.status = ps.length > 0 && b.archivedProjects === ps.length ? 'Archived' : 'Inprogress';
     b.firstJobId = ps.length ? Math.min(...ps.map(p => p.jobId)) : 0;
     b.lastJobId = ps.length ? Math.max(...ps.map(p => p.jobId)) : 0;
     if (touchedBoxes.has(b.boxCode)) b.updatedAt = now;

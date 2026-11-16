@@ -25,9 +25,17 @@ interface GlobalSearchProps {
   onNavigate: (tab: ActiveTab, param?: string) => void;
 }
 
+const fmtDate = (iso?: string | null) => {
+  if (!iso) return '—';
+  const clean = iso.slice(0, 10);
+  const parts = clean.split('-');
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : clean;
+};
+
 export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
-  const { boxes, dossiers, projects, searchIndex, searchArchive, language } = useArchive();
+  const { boxes, dossiers, projects, searchIndex, searchArchive, language, activeWorkspace } = useArchive();
   const isAr = language === 'ar';
+  const isMinutes = activeWorkspace === 'minutes-archive';
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -97,8 +105,16 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
       onNavigate('box-detail', item.boxId);
     } else if (item.type === 'dossier') {
       onNavigate('dossier-detail', item.primaryId);
-    } else if (item.type === 'project' && item.jobId !== undefined) {
-      onNavigate('projects', String(item.jobId));
+    } else if (item.type === 'project') {
+      if (isMinutes && item.project) {
+        const param =
+          item.project.shipmentNo !== undefined
+            ? String(item.project.shipmentNo)
+            : item.project.branchName || String(item.jobId ?? '');
+        onNavigate('projects', param);
+      } else if (item.jobId !== undefined) {
+        onNavigate('projects', String(item.jobId));
+      }
     }
     setDropdownOpen(false);
     setQuery('');
@@ -145,12 +161,18 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
     const samples: string[] = [];
     if (boxes[0]) samples.push(boxes[0].boxCode);
     if (dossiers[0]) samples.push(dossiers[0].id);
-    const archivedProject = projects.find(p => p.status === 'Archived') || projects[0];
-    if (archivedProject) samples.push(String(archivedProject.jobId));
-    samples.push(isAr ? 'مفقود' : 'Missing');
+    if (isMinutes) {
+      const firstBranch = projects[0];
+      if (firstBranch?.branchName) samples.push(firstBranch.branchName);
+      else if (firstBranch?.shipmentNo !== undefined) samples.push(String(firstBranch.shipmentNo));
+    } else {
+      const archivedProject = projects.find(p => p.status === 'Archived') || projects[0];
+      if (archivedProject) samples.push(String(archivedProject.jobId));
+    }
     samples.push(isAr ? 'مؤرشف' : 'Archived');
+    samples.push(isAr ? 'مفقود' : 'Missing');
     return samples;
-  }, [boxes, dossiers, projects, isAr]);
+  }, [boxes, dossiers, projects, isAr, isMinutes]);
 
   const statusBadge = (item: ArchiveSearchItem) => {
     if (item.status === 'Force Closed') {
@@ -195,6 +217,24 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
 
   const renderItemContent = (item: ArchiveSearchItem) => {
     if (item.type === 'box' && item.box) {
+      if (isMinutes) {
+        const boxDossiers = dossiers
+          .filter(d => d.boxId === item.box!.boxCode)
+          .sort((a, b) => a.dossierNumber - b.dossierNumber);
+        const weekRange =
+          boxDossiers[0]?.weekStart
+            ? `${fmtDate(boxDossiers[0].weekStart)} → ${fmtDate(boxDossiers[boxDossiers.length - 1]?.weekEnd)}`
+            : '—';
+        return {
+          icon: <Archive className="w-4 h-4" />,
+          iconBoxClass: 'bg-red-50 dark:bg-red-950/50 text-[#E52225] dark:text-red-400',
+          typeLabel: isAr ? 'بوكس' : 'Box',
+          title: isAr ? `بوكس ${item.box.boxCode}` : `Box ${item.box.boxCode}`,
+          subtitle: isAr
+            ? `${weekRange} · ${boxDossiers.length}/6 دوسيهات · ${item.box.archivedProjects}/${item.box.totalProjects} مؤرشف`
+            : `${weekRange} · ${boxDossiers.length}/6 dossiers · ${item.box.archivedProjects}/${item.box.totalProjects} archived`,
+        };
+      }
       return {
         icon: <Archive className="w-4 h-4" />,
         iconBoxClass: 'bg-[#EAF2FB] dark:bg-[#0B56A8]/25 text-[#0B56A8] dark:text-blue-400',
@@ -206,6 +246,19 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
       };
     }
     if (item.type === 'dossier' && item.dossier) {
+      if (isMinutes) {
+        return {
+          icon: <FolderArchive className="w-4 h-4" />,
+          iconBoxClass: 'bg-amber-50 dark:bg-amber-950/50 text-[#B45309] dark:text-amber-400',
+          typeLabel: isAr ? 'دوسيه' : 'Dossier',
+          title: isAr
+            ? `دوسيه ${item.dossier.dossierNumber} · بوكس ${item.dossier.boxId}`
+            : `Dossier ${item.dossier.id}`,
+          subtitle: isAr
+            ? `أسبوع ${fmtDate(item.dossier.weekStart)} → ${fmtDate(item.dossier.weekEnd)} · ${item.dossier.archivedCount}/${item.dossier.totalProjects} مؤرشف`
+            : `Box ${item.dossier.boxId} · ${fmtDate(item.dossier.weekStart)} → ${fmtDate(item.dossier.weekEnd)} · ${item.dossier.archivedCount}/${item.dossier.totalProjects} archived`,
+        };
+      }
       return {
         icon: <FolderArchive className="w-4 h-4" />,
         iconBoxClass: 'bg-amber-50 dark:bg-amber-950/50 text-[#B45309] dark:text-amber-400',
@@ -219,6 +272,17 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
       };
     }
     const p = item.project!;
+    if (isMinutes) {
+      return {
+        icon: <FileText className="w-4 h-4" />,
+        iconBoxClass: 'bg-slate-100 dark:bg-neutral-900 text-[#3F4144] dark:text-neutral-300',
+        typeLabel: isAr ? 'فرع' : 'Branch',
+        title: p.branchName || `#${p.shipmentNo ?? p.jobId}`,
+        subtitle: isAr
+          ? `إرسالية #${p.shipmentNo ?? '—'} · تشغيل ${fmtDate(p.startDate)} · ${p.boxId}-${p.dossierNumber}`
+          : `Shipment #${p.shipmentNo ?? '—'} · Start ${fmtDate(p.startDate)} · ${p.boxId}-${p.dossierNumber}`,
+      };
+    }
     return {
       icon: <FileText className="w-4 h-4" />,
       iconBoxClass: 'bg-slate-100 dark:bg-neutral-900 text-[#3F4144] dark:text-neutral-300',
@@ -231,6 +295,18 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
   };
 
   const allCount = countsByType.box + countsByType.dossier + countsByType.project;
+  const focusBorderClass = isMinutes
+    ? 'border-[#E52225] ring-2 ring-[#E52225]/15'
+    : 'border-[#0B56A8] ring-2 ring-[#0B56A8]/15';
+  const searchIconColor = isMinutes ? 'text-[#E52225] dark:text-red-400' : 'text-[#0B56A8] dark:text-blue-400';
+  const activeTabBg = isMinutes ? 'bg-[#E52225] text-white' : 'bg-[#0B56A8] text-white';
+  const activeRowBg = isMinutes
+    ? 'bg-red-50/80 dark:bg-red-950/25'
+    : 'bg-[#EAF2FB]/80 dark:bg-[#0B56A8]/20';
+  const activeArrowColor = isMinutes ? 'text-[#E52225] dark:text-red-400' : 'text-[#0B56A8] dark:text-blue-400';
+  const samplePillClass = isMinutes
+    ? 'px-2.5 py-1 text-xs font-semibold text-[#E52225] dark:text-red-300 bg-red-50 dark:bg-red-950/35 hover:bg-red-100 dark:hover:bg-red-950/50 rounded-lg transition-colors'
+    : 'px-2.5 py-1 text-xs font-semibold text-[#0B56A8] dark:text-blue-300 bg-[#EAF2FB] dark:bg-[#0B56A8]/20 hover:bg-blue-100 dark:hover:bg-[#0B56A8]/35 rounded-lg transition-colors';
 
   return (
     <div ref={containerRef} className="relative z-30">
@@ -238,13 +314,13 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
       <div
         className={`bg-white dark:bg-[#111111] border rounded-xl transition-colors ${
           dropdownOpen
-            ? 'border-[#0B56A8] ring-2 ring-[#0B56A8]/15'
+            ? focusBorderClass
             : 'border-slate-200 dark:border-neutral-800 hover:border-slate-300 dark:hover:border-neutral-700'
         }`}
       >
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-3.5 py-2.5">
           <div className="flex items-center gap-2.5 flex-1 min-w-0">
-            <Search className="w-4 h-4 text-[#0B56A8] dark:text-blue-400 shrink-0" />
+            <Search className={`w-4 h-4 shrink-0 ${searchIconColor}`} />
             <input
               ref={inputRef}
               type="text"
@@ -256,7 +332,11 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
               }}
               onKeyDown={handleInputKeyDown}
               placeholder={
-                isAr
+                isMinutes
+                  ? isAr
+                    ? 'بحث شامل: ابحث بكود البوكس (C1)، الدوسيه (C1-1)، اسم الفرع، رقم الإرسالية، التاريخ، أو الحالة...'
+                    : 'Global search: Box (C1), Dossier (C1-1), Branch name, Shipment #, date, or status...'
+                  : isAr
                   ? 'بحث شامل: ابحث برقم البوكس (D41)، الدوسيه (D41-1)، رقم المشروع (35200)، أو أي كلمة مفتاحية...'
                   : 'Global search: find any Box (D41), Dossier (D41-1), Project ID (35200), status, date, or keyword...'
               }
@@ -292,7 +372,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                   },
                   {
                     key: 'project',
-                    label: isAr ? 'مشروع' : 'Projects',
+                    label: isMinutes ? (isAr ? 'فرع' : 'Branches') : isAr ? 'مشروع' : 'Projects',
                     count: query.trim() ? countsByType.project : projects.length,
                   },
                 ] as const
@@ -307,7 +387,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                   }}
                   className={`flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded-lg transition-colors whitespace-nowrap ${
                     typeFilter === tab.key
-                      ? 'bg-[#0B56A8] text-white'
+                      ? activeTabBg
                       : 'text-slate-600 dark:text-neutral-400 hover:bg-slate-100 dark:hover:bg-neutral-900'
                   }`}
                 >
@@ -344,7 +424,11 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
               <div className="p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-neutral-400">
                   <span>
-                    {isAr
+                    {isMinutes
+                      ? isAr
+                        ? 'ابحث باسم الفرع أو رقم الإرسالية أو البوكس (C1) أو التاريخ أو الحالة.'
+                        : 'Search by branch name, shipment #, box code (C1), operational date, or status.'
+                      : isAr
                       ? 'ابحث بالرقم التعريفي أو الكلمات المفتاحية (الحالة، التاريخ، اسم ملف الاستيراد).'
                       : 'Search by ID or keywords (status, approval date, or Excel source filename).'}
                   </span>
@@ -365,7 +449,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                         setQuery(sample);
                         inputRef.current?.focus();
                       }}
-                      className="px-2.5 py-1 text-xs font-semibold text-[#0B56A8] dark:text-blue-300 bg-[#EAF2FB] dark:bg-[#0B56A8]/20 hover:bg-blue-100 dark:hover:bg-[#0B56A8]/35 rounded-lg transition-colors"
+                      className={samplePillClass}
                     >
                       {sample}
                     </button>
@@ -378,7 +462,11 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                   {isAr ? `لا توجد نتائج مطابقة لـ "${query}"` : `No results found for "${query}"`}
                 </div>
                 <p className="text-xs text-slate-400 dark:text-neutral-500">
-                  {isAr
+                  {isMinutes
+                    ? isAr
+                      ? 'جرب البحث باسم الفرع أو رقم الإرسالية أو رمز البوكس (مثل C1) أو حالة الأرشفة.'
+                      : 'Try searching by branch name, shipment #, box code (e.g. C1), dossier (C1-1), or status.'
+                    : isAr
                     ? 'جرب البحث برقم المشروع (مثل 35200) أو رمز البوكس (مثل D41) أو حالة الأرشفة.'
                     : 'Try searching by Job ID (e.g. 35200), Box code (e.g. D41), Dossier ID (D41-1), or status.'}
                 </p>
@@ -395,9 +483,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => handleSelectItem(item)}
                     className={`w-full flex items-center justify-between gap-3 px-4 py-2.5 text-start transition-colors ${
-                      isActive
-                        ? 'bg-[#EAF2FB]/80 dark:bg-[#0B56A8]/20'
-                        : 'hover:bg-slate-50 dark:hover:bg-neutral-900/60'
+                      isActive ? activeRowBg : 'hover:bg-slate-50 dark:hover:bg-neutral-900/60'
                     }`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
@@ -424,7 +510,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
 
                     <ArrowRight
                       className={`w-4 h-4 shrink-0 rtl:rotate-180 transition-colors ${
-                        isActive ? 'text-[#0B56A8] dark:text-blue-400' : 'text-slate-300 dark:text-neutral-700'
+                        isActive ? activeArrowColor : 'text-slate-300 dark:text-neutral-700'
                       }`}
                     />
                   </button>
@@ -450,9 +536,13 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({ onNavigate }) => {
                   onNavigate('projects', query.trim());
                   setDropdownOpen(false);
                 }}
-                className="font-semibold text-[#0B56A8] dark:text-blue-400 hover:underline"
+                className={`font-semibold hover:underline ${searchIconColor}`}
               >
-                {isAr
+                {isMinutes
+                  ? isAr
+                    ? `عرض كل النتائج (${totalMatches}) في صفحة الفروع`
+                    : `View all ${totalMatches} matches in Branches`
+                  : isAr
                   ? `عرض كل النتائج (${totalMatches}) في سجل المشاريع`
                   : `View all ${totalMatches} matches in Projects`}
               </button>

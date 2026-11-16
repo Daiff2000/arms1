@@ -169,8 +169,8 @@ function MainApp() {
           : 'Pallet Handover Reports'
         : activeWorkspace === 'minutes-archive'
         ? isAr
-          ? 'أرشفة تعليقات ومحاضر'
-          : 'Comments & Minutes Archive'
+          ? 'أرشفة التعليقات'
+          : 'Comments Archive'
         : isAr
         ? 'أرشفة تقارير التشغيل'
         : 'Operations Reports';
@@ -185,7 +185,7 @@ function MainApp() {
         return [
           homeCrumb,
           { label: isAr ? 'البوكسات' : 'Boxes', tab: 'boxes' as ActiveTab },
-          { label: `Box ${selectedBoxId}` },
+          { label: `${isAr ? 'بوكس' : 'Box'} ${selectedBoxId}` },
         ];
       case 'dossiers':
         return [homeCrumb, { label: isAr ? 'الدوسيهات' : 'Dossiers' }];
@@ -195,7 +195,7 @@ function MainApp() {
           homeCrumb,
           { label: isAr ? 'البوكسات' : 'Boxes', tab: 'boxes' as ActiveTab },
           {
-            label: `Box ${d?.boxId || selectedBoxId}`,
+            label: `${isAr ? 'بوكس' : 'Box'} ${d?.boxId || selectedBoxId}`,
             tab: 'box-detail' as ActiveTab,
             param: d?.boxId || selectedBoxId,
           },
@@ -205,7 +205,16 @@ function MainApp() {
       case 'projects':
         return [
           homeCrumb,
-          { label: isAr ? 'المشاريع' : 'Projects' },
+          {
+            label:
+              activeWorkspace === 'minutes-archive'
+                ? isAr
+                  ? 'الفروع'
+                  : 'Branches'
+                : isAr
+                ? 'المشاريع'
+                : 'Projects',
+          },
           ...(projectsFilter ? [{ label: projectsFilter }] : []),
         ];
       case 'reports':
@@ -264,7 +273,17 @@ function MainApp() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeWorkspace === 'pallet-archive' || activeWorkspace === 'minutes-archive' ? (
-          <SectionPagesView workspace={activeWorkspace} activeTab={activeTab} onNavigate={handleNavigate} />
+          <SectionPagesView
+            workspace={activeWorkspace}
+            activeTab={activeTab}
+            selectedBoxId={selectedBoxId}
+            selectedDossierId={selectedDossierId}
+            projectsFilter={projectsFilter}
+            labelInitialBoxCode={labelInitialBoxCode}
+            onNavigate={handleNavigate}
+            onSelectBox={id => setSelectedBoxId(id)}
+            onSelectDossier={id => setSelectedDossierId(id)}
+          />
         ) : (
           <>
             {activeTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}

@@ -19,25 +19,53 @@ import { ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { useArchive } from '../../context/ArchiveContext';
 import { ActiveTab } from '../navigation/TopNav';
 import { MinutesPlanImport } from './MinutesPlanImport';
+import { MinutesArchiveViews } from './MinutesArchiveViews';
 import logoColor from '../../assets/logo.png';
 import armsLogoLight from '../../assets/arms-logo.png';
 
 interface SectionPagesViewProps {
   workspace: 'pallet-archive' | 'minutes-archive';
   activeTab: ActiveTab;
+  selectedBoxId?: string;
+  selectedDossierId?: string;
+  projectsFilter?: string;
+  labelInitialBoxCode?: string;
   onNavigate: (tab: ActiveTab, param?: string) => void;
+  onSelectBox?: (boxId: string) => void;
+  onSelectDossier?: (dossierId: string) => void;
 }
 
 export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   workspace,
   activeTab,
+  selectedBoxId = 'C1',
+  selectedDossierId = 'C1-1',
+  projectsFilter = '',
+  labelInitialBoxCode = 'C1',
   onNavigate,
+  onSelectBox,
+  onSelectDossier,
 }) => {
   const { currentUser, language, minutesArchive } = useArchive();
   const isAr = language === 'ar';
   const DirectionalArrow = isAr ? ArrowLeft : ArrowRight;
 
   const isPallet = workspace === 'pallet-archive';
+
+  if (!isPallet) {
+    return (
+      <MinutesArchiveViews
+        activeTab={activeTab}
+        selectedBoxId={selectedBoxId}
+        selectedDossierId={selectedDossierId}
+        projectsFilter={projectsFilter}
+        labelInitialBoxCode={labelInitialBoxCode}
+        onNavigate={onNavigate}
+        onSelectBox={id => onSelectBox?.(id)}
+        onSelectDossier={id => onSelectDossier?.(id)}
+      />
+    );
+  }
 
   const theme = isPallet
     ? {
@@ -63,10 +91,10 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         importTitle: isAr ? 'استيراد بيانات الباليت' : 'Import Pallet Data',
       }
     : {
-        sectionTitle: isAr ? 'أرشفة تعليقات ومحاضر' : 'Comments & Minutes Archive',
+        sectionTitle: isAr ? 'أرشفة التعليقات' : 'Comments Archive',
         sectionSubtitle: isAr
-          ? 'نظرة شاملة على أرشفة المحاضر والتعليقات وحالة السجلات.'
-          : 'Overview of archived comments, minutes, and record statuses.',
+          ? 'نظرة شاملة على أرشفة التعليقات وحالة السجلات.'
+          : 'Overview of archived comments and record statuses.',
         accentText: 'text-[#E52225] dark:text-red-400',
         accentHoverText: 'hover:text-[#C81B1E] dark:hover:text-red-300',
         accentGroupHoverText: 'group-hover:text-[#E52225] dark:group-hover:text-red-400',
@@ -76,13 +104,13 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         accentBorderFocus: 'focus:border-[#E52225] focus:ring-[#E52225]',
         accentBorderHover: 'hover:border-[#E52225]/50',
         accentHex: '#E52225',
-        archiveTitle: isAr ? 'أرشيف التعليقات والمحاضر' : 'Comments & Minutes Directory',
+        archiveTitle: isAr ? 'أرشيف التعليقات' : 'Comments Directory',
         archiveSubtitle: isAr
-          ? 'قائمة السجلات والمحاضر والتعليقات المؤرشفة.'
-          : 'Structured archive directory for comments and meeting minutes.',
-        reportsTitle: isAr ? 'مركز تقارير المحاضر والتعليقات' : 'Minutes Reports Center',
-        labelsTitle: isAr ? 'طباعة ليبلات المحاضر' : 'Minutes Thermal Labels',
-        importTitle: isAr ? 'استيراد بيانات المحاضر' : 'Import Minutes Data',
+          ? 'قائمة السجلات والتعليقات المؤرشفة.'
+          : 'Structured archive directory for comments.',
+        reportsTitle: isAr ? 'مركز تقارير التعليقات' : 'Comments Reports Center',
+        labelsTitle: isAr ? 'طباعة ليبلات التعليقات' : 'Archive Thermal Labels',
+        importTitle: isAr ? 'استيراد بيانات التعليقات' : 'Import Archive Data',
       };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -615,13 +643,13 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <div className="flex items-center justify-between gap-4 pb-1">
                   <img src={logoColor} alt="Intercom" className="h-7 w-auto object-contain" />
                   <h3 className="text-base font-bold text-slate-900 text-center">
-                    {isPallet ? 'Pallet Handover Report' : 'Comments & Minutes Report'}
+                    {isPallet ? 'Pallet Handover Report' : 'Comments Archive Report'}
                   </h3>
                   <img src={armsLogoLight} alt="ARMS" className="h-7 w-auto object-contain" />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5">
-                  <div><span className="font-bold text-slate-600">Section :</span> {isPallet ? 'Pallet Archive' : 'Minutes Archive'}</div>
+                  <div><span className="font-bold text-slate-600">Section :</span> {isPallet ? 'Pallet Archive' : 'Comments Archive'}</div>
                   <div><span className="font-bold text-slate-600">Prepared By :</span> {currentUser?.name || 'Admin'}</div>
                 </div>
 
@@ -717,17 +745,17 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
               <div className="flex items-center justify-between border-b border-black pb-2">
                 <span className="text-xs font-extrabold tracking-wide uppercase">INTERCOM · ARMS</span>
                 <span className="text-[11px] font-bold">
-                  {isPallet ? 'PALLET ARCHIVE' : 'MINUTES ARCHIVE'}
+                  {isPallet ? 'PALLET ARCHIVE' : 'COMMENTS ARCHIVE'}
                 </span>
               </div>
               <div className="text-center my-auto">
                 <div className="text-2xl font-black font-mono tracking-wider">
-                  {labelPreviewCode || (isPallet ? 'PLT-001' : 'MIN-001')}
+                  {labelPreviewCode || (isPallet ? 'PLT-001' : 'C1')}
                 </div>
                 <div className="text-[11px] text-neutral-600 mt-1">100 × 50 mm Thermal Template</div>
               </div>
               <div className="border-t border-black pt-1.5 flex items-center justify-between text-[10px] font-mono">
-                <span>SECTION: {isPallet ? '02 PALLET' : '03 MINUTES'}</span>
+                <span>SECTION: {isPallet ? '02 PALLET' : '03 COMMENTS'}</span>
                 <span>READY</span>
               </div>
             </div>

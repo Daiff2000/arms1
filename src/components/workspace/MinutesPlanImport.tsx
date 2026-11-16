@@ -13,14 +13,14 @@ export const MinutesPlanImport: React.FC = () => {
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<ParseResult | null>(null);
   const [error, setError] = useState('');
-  const [prefix, setPrefix] = useState('M');
+  const [prefix, setPrefix] = useState('C');
   const [startBox, setStartBox] = useState(1);
   const [dragging, setDragging] = useState(false);
 
   const build: PlanBuild | null = useMemo(() => {
     if (!parsed) return null;
     return buildMinutesPlan(parsed.rows, minutesArchive, {
-      boxPrefix: prefix.trim() || 'M',
+      boxPrefix: prefix.trim().toUpperCase() || 'C',
       startBoxNumber: Math.max(1, startBox || 1),
       fileName,
       userName: currentUser.name,
@@ -69,7 +69,7 @@ export const MinutesPlanImport: React.FC = () => {
         <input ref={inputRef} type="file" accept=".xlsx,.xlsm,.xls" className="hidden" onChange={e => e.target.files?.[0] && readFile(e.target.files[0])} />
         <div className="w-12 h-12 rounded-xl mx-auto flex items-center justify-center bg-red-50 dark:bg-red-950/40 text-[#E52225]"><Upload className="w-6 h-6" /></div>
         <div className="text-sm font-bold text-slate-900 dark:text-white">{fileName || (isAr ? 'اسحب شيت الخطة هنا أو اضغط للاختيار' : 'Drop the plan sheet here or click to choose')}</div>
-        <p className="text-xs text-slate-400">{isAr ? 'يُسحب: اسم الفرع · كود الفرع · رقم الارسالية · عدد المناديل · المنطقة · تاريخ البدء/النهاية' : 'Branch, code, shipment, folders, region, start/end dates'}</p>
+        <p className="text-xs text-slate-400">{isAr ? 'يُسحب: اسم الفرع · رقم الإرسالية (المميز للفرع) · تاريخ بدء التشغيل · والحقول الإضافية (كود الفرع، المناديل، المنطقة)' : 'Branch name, shipment no., operational start date (plus optional code, folders, region)'}</p>
       </div>
 
       {error && <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded-lg px-4 py-3"><AlertTriangle className="w-4 h-4" />{error}</div>}

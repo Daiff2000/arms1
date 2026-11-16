@@ -33,6 +33,7 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
     logout,
     setActiveWorkspace,
     operationsArchive,
+    minutesArchive,
     archiveLoading,
   } = useArchive();
 
@@ -96,11 +97,15 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
     {
       id: 'minutes-archive',
       index: '03',
-      title: isAr ? 'أرشفة تعليقات ومحاضر' : 'Comments & Minutes Archive',
-      subtitle: isAr ? 'أرشفة التعليقات والمحاضر والتقارير الخاصة بها' : 'Comments, minutes & related reports',
-      stat: isAr ? '5 صفحات · جاهز للإعداد' : '5 pages · Ready',
+      title: isAr ? 'أرشفة التعليقات' : 'Comments Archive',
+      subtitle: isAr ? 'أرشفة تعليقات الفروع والإرساليات والتقارير الخاصة بها' : 'Branch comments, shipments & related reports',
+      stat: archiveLoading
+        ? '—'
+        : isAr
+        ? `${minutesArchive.boxes.length} بوكس · ${minutesArchive.projects.length.toLocaleString()} فرع`
+        : `${minutesArchive.boxes.length} boxes · ${minutesArchive.projects.length.toLocaleString()} branches`,
       image: stackedMinutesImg,
-      imageAlt: 'Stacked Official Minutes and Annotated Reports',
+      imageAlt: 'Stacked Official Annotated Archive Reports',
       icon: MessageSquareText,
       accentHex: '#E52225',
     },
