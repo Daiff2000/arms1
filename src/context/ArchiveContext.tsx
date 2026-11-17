@@ -22,6 +22,11 @@ import {
 } from '../types';
 import { buildBoxStructure } from '../utils/archiveCalculations';
 import { apiFetch, errorFrom, loadArchiveSnapshot, setSessionToken } from '../utils/archiveApi';
+import {
+  ArchiveScope,
+  deleteUploadInOperationsStore,
+  deleteUploadInWorkspaceStore,
+} from '../utils/uploadDeletion';
 
 const createEmptyWorkspaceStore = (): WorkspaceArchiveStore => ({
   boxes: [],
@@ -125,11 +130,15 @@ interface ArchiveContextType {
     targetBoxCode?: string
   ) => { importedCount: number; duplicateCount: number; newBoxesCreated: number; rejectedCount: number };
   commitMinutesPlan: (store: WorkspaceArchiveStore, summary: string) => boolean;
+  deleteArchiveUpload: (scope: ArchiveScope, uploadId: string) => Promise<boolean>;
+  clearModuleArchive: (scope: ArchiveScope) => Promise<boolean>;
   createBox: (boxCode: string, firstJobId: number) => Box;
   forceCloseBox: (boxId: string, reason: string) => boolean;
   reopenBox: (boxId: string) => boolean;
   updateProjectStatus: (jobId: number, newStatus: ProjectStatus, note?: string) => void;
   bulkUpdateProjectStatus: (jobIds: number[], newStatus: ProjectStatus, note?: string) => void;
+  updateBoxesStatus: (boxCodes: string[], newStatus: ProjectStatus, note?: string) => void;
+  updateDossiersStatus: (dossierIds: string[], newStatus: ProjectStatus, note?: string) => void;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   addUser: (user: Omit<User, 'id' | 'lastLogin'>, password: string) => Promise<void>;
@@ -527,6 +536,269 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return true;
   };
 
+  const deleteArchiveUpload = async (scope: ArchiveScope, uploadId: string): Promise<boolean> => {
+    if (currentUser.role !== 'System Admin') {
+      showToast(
+        language === 'ar'
+          ? 'مسح الرفعات أو البيانات متاح لمدير النظام (System Admin) فقط.'
+          : 'Deleting uploads or archive data is restricted to System Admin only.',
+        'error'
+      );
+      return false;
+    }
+
+    const nowDisplay = new Date().toLocaleString();
+    const scopeLabelAr =
+      scope === 'operations' ? 'أرشفة تقارير التشغيل' : scope === 'pallet' ? 'أرشفة تسليم الباليت' : 'أرشفة التعليقات';
+
+    if (scope === 'operations') {
+      const currentOpStore: WorkspaceArchiveStore = {
+        boxes: opBoxes,
+        dossiers: opDossiers,
+        projects: opProjects,
+        uploadHistory: opUploadHistory,
+        notifications: opNotifications,
+      };
+      const result = deleteUploadInOperationsStore(currentOpStore, uploadId);
+      if (!result) return false;
+
+      const auditEntry: AuditLogEntry = {
+        id: `aud-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        action: 'Delete Upload Batch',
+        recordType: 'Import',
+        recordId: result.upload.id,
+        timestamp: nowDisplay,
+        details: `[${scope}] Deleted upload "${result.upload.fileName}" (${result.deletedProjectsCount} records, ${result.removedBoxesCount} empty boxes pruned)`,
+      };
+      const nextAuditLogs = [auditEntry, ...auditLogs];
+
+      const r = await apiFetch<{ ok?: boolean; revision?: number }>(
+        '/api/state',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            boxes: result.nextStore.boxes,
+            dossiers: result.nextStore.dossiers,
+            projects: result.nextStore.projects,
+            uploadHistory: result.nextStore.uploadHistory,
+            notifications: result.nextStore.notifications,
+            auditLogs: nextAuditLogs,
+            _revision: revisionRef.current,
+          }),
+        },
+        60000
+      );
+
+      if (r.status === 409) {
+        showToast(
+          language === 'ar'
+            ? 'تم تعديل البيانات من جلسة أخرى. أعد تحميل الصفحة أولاً.'
+            : 'Data was modified in another session. Reload the page first.',
+          'warning'
+        );
+        return false;
+      }
+      if (!r.ok || !r.body) {
+        showToast(errorFrom(r, language === 'ar' ? 'تعذر حذف الرفعة من قاعدة البيانات' : 'Failed deleting upload'), 'error');
+        return false;
+      }
+
+      if (typeof r.body.revision === 'number') {
+        revisionRef.current = Number(r.body.revision);
+      }
+      skipNextSaveRef.current = true;
+      setOpBoxes(result.nextStore.boxes);
+      setOpDossiers(result.nextStore.dossiers);
+      setOpProjects(result.nextStore.projects);
+      setOpUploadHistory(result.nextStore.uploadHistory);
+      setAuditLogs(nextAuditLogs);
+
+      showToast(
+        language === 'ar'
+          ? `تم مسح الرفعة "${result.upload.fileName}" (${result.deletedProjectsCount} سجل) من ${scopeLabelAr}.`
+          : `Deleted upload "${result.upload.fileName}" (${result.deletedProjectsCount} records).`,
+        'success'
+      );
+      return true;
+    }
+
+    const moduleKey = scope === 'pallet' ? 'palletArchive' : 'minutesArchive';
+    const currentStore = scope === 'pallet' ? palletArchive : minutesArchive;
+    const result = deleteUploadInWorkspaceStore(currentStore, uploadId);
+    if (!result) return false;
+
+    const r = await apiFetch(
+      '/api/modules',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [moduleKey]: result.nextStore }),
+      },
+      30000
+    );
+
+    if (!r.ok) {
+      showToast(errorFrom(r, language === 'ar' ? 'تعذر حذف الرفعة من قاعدة البيانات' : 'Failed deleting upload'), 'error');
+      return false;
+    }
+
+    dirtyModulesRef.current[moduleKey] = false;
+    if (scope === 'pallet') setPalletArchive(result.nextStore);
+    else setMinutesArchive(result.nextStore);
+
+    addAuditLog(
+      'Delete Upload Batch',
+      'Import',
+      result.upload.id,
+      `[${scope}] Deleted upload "${result.upload.fileName}" (${result.deletedProjectsCount} records, ${result.removedDossiersCount} dossiers, ${result.removedBoxesCount} boxes)`
+    );
+
+    showToast(
+      language === 'ar'
+        ? `تم مسح الرفعة "${result.upload.fileName}" (${result.deletedProjectsCount} سجل) من ${scopeLabelAr} بنجاح.`
+        : `Deleted upload "${result.upload.fileName}" (${result.deletedProjectsCount} records) successfully.`,
+      'success'
+    );
+    return true;
+  };
+
+  const clearModuleArchive = async (scope: ArchiveScope): Promise<boolean> => {
+    if (currentUser.role !== 'System Admin') {
+      showToast(
+        language === 'ar'
+          ? 'مسح بيانات الأقسام متاح لمدير النظام (System Admin) فقط.'
+          : 'Clearing archive data is restricted to System Admin only.',
+        'error'
+      );
+      return false;
+    }
+
+    const emptyStore = createEmptyWorkspaceStore();
+    const nowDisplay = new Date().toLocaleString();
+    const scopeLabelAr =
+      scope === 'operations' ? 'أرشفة تقارير التشغيل' : scope === 'pallet' ? 'أرشفة تسليم الباليت' : 'أرشفة التعليقات';
+
+    if (scope === 'operations') {
+      const prevBoxes = opBoxes.length;
+      const prevProjects = opProjects.length;
+      const auditEntry: AuditLogEntry = {
+        id: `aud-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        action: 'Clear Operations Archive',
+        recordType: 'Settings',
+        recordId: 'operationsArchive',
+        timestamp: nowDisplay,
+        details: `Cleared all Operations Reports archive data (${prevBoxes} boxes, ${prevProjects} slots)`,
+      };
+      const nextAuditLogs = [auditEntry, ...auditLogs];
+
+      const r = await apiFetch<{ ok?: boolean; revision?: number }>(
+        '/api/state',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            boxes: [],
+            dossiers: [],
+            projects: [],
+            uploadHistory: [],
+            notifications: [],
+            auditLogs: nextAuditLogs,
+            _revision: revisionRef.current,
+          }),
+        },
+        60000
+      );
+
+      if (r.status === 409) {
+        showToast(
+          language === 'ar'
+            ? 'تم تعديل البيانات من جلسة أخرى. أعد تحميل الصفحة أولاً.'
+            : 'Data was modified in another session. Reload the page first.',
+          'warning'
+        );
+        return false;
+      }
+      if (!r.ok || !r.body) {
+        showToast(errorFrom(r, language === 'ar' ? 'تعذر مسح بيانات القسم' : 'Failed clearing archive data'), 'error');
+        return false;
+      }
+
+      if (typeof r.body.revision === 'number') {
+        revisionRef.current = Number(r.body.revision);
+      }
+      skipNextSaveRef.current = true;
+      setOpBoxes([]);
+      setOpDossiers([]);
+      setOpProjects([]);
+      setOpUploadHistory([]);
+      setOpNotifications([]);
+      setAuditLogs(nextAuditLogs);
+
+      showToast(
+        language === 'ar'
+          ? `تم مسح جميع بيانات ${scopeLabelAr} من قاعدة البيانات بنجاح.`
+          : 'Cleared Operations Reports archive data successfully.',
+        'success'
+      );
+      return true;
+    }
+
+    const moduleKey = scope === 'pallet' ? 'palletArchive' : 'minutesArchive';
+    const recordsKey = scope === 'pallet' ? 'palletReports' : 'minutesRecords';
+    const currentStore = scope === 'pallet' ? palletArchive : minutesArchive;
+    const prevCount = {
+      boxes: currentStore.boxes.length,
+      dossiers: currentStore.dossiers.length,
+      projects: currentStore.projects.length,
+    };
+
+    const r = await apiFetch(
+      '/api/modules',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          [moduleKey]: emptyStore,
+          [recordsKey]: [],
+        }),
+      },
+      30000
+    );
+
+    if (!r.ok) {
+      showToast(errorFrom(r, language === 'ar' ? 'تعذر مسح بيانات القسم من قاعدة البيانات' : 'Failed clearing section data'), 'error');
+      return false;
+    }
+
+    dirtyModulesRef.current[moduleKey] = false;
+    if (scope === 'pallet') {
+      setPalletArchive(emptyStore);
+      setPalletReports([]);
+    } else {
+      setMinutesArchive(emptyStore);
+      setMinutesRecords([]);
+    }
+
+    addAuditLog(
+      scope === 'pallet' ? 'Clear Pallet Archive' : 'Clear Comments Archive',
+      'Settings',
+      moduleKey,
+      `Cleared ${scope} database (${prevCount.boxes} boxes, ${prevCount.dossiers} dossiers, ${prevCount.projects} records)`
+    );
+    showToast(
+      language === 'ar'
+        ? `تم مسح جميع بيانات ${scopeLabelAr} من قاعدة البيانات بنجاح.`
+        : `Cleared ${scope} archive data successfully.`,
+      'success'
+    );
+    return true;
+  };
+
   const addAuditLog = (
     action: string,
     recordType: AuditLogEntry['recordType'],
@@ -627,6 +899,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       groups.set(boxIndex, group);
     });
 
+    const batchUploadId = `upl-${Date.now()}`;
     let updatedBoxes = [...boxes];
     let updatedDossiers = [...dossiers];
     let updatedProjects = [...projects];
@@ -652,11 +925,19 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       const currentById = new Map<number, Project>();
       updatedProjects.filter(p => p.boxId === boxCode).forEach(p => currentById.set(p.jobId, p));
-      const archivedMap = new Map<number, { dateApproved: string | null; sourceUpload?: string; status?: ProjectStatus }>();
+      const archivedMap = new Map<
+        number,
+        { dateApproved: string | null; sourceUpload?: string; uploadId?: string; status?: ProjectStatus }
+      >();
 
       currentById.forEach((project, jobId) => {
         if (project.sourceUpload !== 'Reserved Slot' && project.sourceUpload !== 'System Slot') {
-          archivedMap.set(jobId, { dateApproved: project.dateApproved, sourceUpload: project.sourceUpload, status: project.status });
+          archivedMap.set(jobId, {
+            dateApproved: project.dateApproved,
+            sourceUpload: project.sourceUpload,
+            uploadId: project.uploadId,
+            status: project.status,
+          });
         }
       });
 
@@ -675,6 +956,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         archivedMap.set(item.jobId, {
           dateApproved: item.dateApproved,
           sourceUpload: fileName,
+          uploadId: batchUploadId,
           status: item.archiveStatus || 'Archived',
         });
       });
@@ -697,7 +979,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     const uploadRec: UploadRecord = {
-      id: `upl-${Date.now()}`,
+      id: batchUploadId,
       fileName,
       userName: currentUser.name,
       timestamp: new Date().toLocaleString(),
@@ -896,6 +1178,237 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const bulkUpdateProjectStatus = (jobIds: number[], newStatus: ProjectStatus, note?: string) => {
     applyStatusUpdates(jobIds, newStatus, note);
+  };
+
+  const updateBoxesStatus = (boxCodes: string[], newStatus: ProjectStatus, note?: string) => {
+    if (!['System Admin', 'Archive Manager', 'Data Entry'].includes(currentUser.role)) {
+      showToast(
+        language === 'ar' ? 'ليس لديك صلاحية تعديل حالة البوكس.' : 'You do not have permission to update box status.',
+        'error'
+      );
+      return;
+    }
+    const cleanCodes = Array.from(new Set(boxCodes.map(c => c.trim()).filter(Boolean)));
+    if (cleanCodes.length === 0) return;
+
+    const boxSet = new Set(cleanCodes);
+    const now = new Date().toISOString();
+    const displayTimestamp = new Date().toLocaleString();
+    const isFixedSlots = scopedMode === 'operations';
+    const statusNote =
+      note?.trim() ||
+      (language === 'ar'
+        ? `تحديث حالة البوكس بالكامل بواسطة ${currentUser.name}`
+        : `Bulk box status update by ${currentUser.name}`);
+
+    const updatedProjects = projects.map(p => {
+      if (!boxSet.has(p.boxId)) return p;
+      const historyEntry = {
+        status: newStatus,
+        timestamp: displayTimestamp,
+        note: statusNote,
+        user: currentUser.name,
+      };
+      return {
+        ...p,
+        status: newStatus,
+        lastUpdateDate: now,
+        statusHistory: [historyEntry, ...(p.statusHistory || [])],
+      };
+    });
+
+    const updatedDossiers = dossiers.map(d => {
+      if (!boxSet.has(d.boxId)) return d;
+      const dProjects = updatedProjects.filter(p => p.boxId === d.boxId && p.dossierNumber === d.dossierNumber);
+      const dArch = dProjects.filter(p => p.status === 'Archived').length;
+      const dMiss = dProjects.filter(p => p.status === 'Missing').length;
+      const dPend = dProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 50 : dProjects.length;
+      const nextStatus: Dossier['status'] =
+        dProjects.length > 0 && dArch === expectedTotal
+          ? 'Archived'
+          : isFixedSlots
+          ? dArch > 0
+            ? 'Inprogress'
+            : 'Pending'
+          : dArch + dMiss > 0
+          ? 'Inprogress'
+          : 'Pending';
+      return {
+        ...d,
+        totalProjects: isFixedSlots ? d.totalProjects : dProjects.length,
+        archivedCount: dArch,
+        missingCount: dMiss,
+        pendingCount: dPend,
+        status: nextStatus,
+      };
+    });
+
+    const updatedBoxes = boxes.map(b => {
+      if (!boxSet.has(b.boxCode)) return b;
+      const boxProjects = updatedProjects.filter(p => p.boxId === b.boxCode);
+      const boxDossiers = updatedDossiers.filter(d => d.boxId === b.boxCode);
+      const boxArchived = boxProjects.filter(p => p.status === 'Archived').length;
+      const boxMissing = boxProjects.filter(p => p.status === 'Missing').length;
+      const boxPending = boxProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 300 : boxProjects.length;
+      const nextBoxStatus: Box['status'] =
+        boxProjects.length > 0
+          ? boxArchived === expectedTotal
+            ? 'Archived'
+            : 'Inprogress'
+          : newStatus === 'Archived'
+          ? 'Archived'
+          : 'Inprogress';
+      return {
+        ...b,
+        totalProjects: isFixedSlots ? b.totalProjects : boxProjects.length,
+        archivedProjects: boxArchived,
+        missingProjects: boxMissing,
+        pendingProjects: boxPending,
+        completedDossiers: boxDossiers.filter(d => d.status === 'Archived').length,
+        status: nextBoxStatus,
+        updatedAt: now,
+      };
+    });
+
+    setProjects(updatedProjects);
+    setDossiers(updatedDossiers);
+    setBoxes(updatedBoxes);
+
+    const affectedCount = updatedProjects.filter(p => boxSet.has(p.boxId)).length;
+    addAuditLog(
+      'Update Box Status',
+      'Box',
+      cleanCodes.join(', '),
+      `Updated ${cleanCodes.length} box(es) (${cleanCodes.join(', ')}) [${affectedCount} items] to ${newStatus}. Note: ${statusNote}`
+    );
+    const statusLabelAr =
+      newStatus === 'Archived' ? 'مؤرشف (مكتمل)' : newStatus === 'Pending' ? 'قيد الانتظار' : 'مفقود';
+    showToast(
+      language === 'ar'
+        ? cleanCodes.length === 1
+          ? `تم تحديث حالة البوكس ${cleanCodes[0]} بالكامل إلى ${statusLabelAr} (${affectedCount} سجل).`
+          : `تم تحديث حالة ${cleanCodes.length} بوكسات إلى ${statusLabelAr} (${affectedCount} سجل).`
+        : `Updated ${cleanCodes.length} box(es) (${affectedCount} items) to ${newStatus}.`,
+      'success'
+    );
+  };
+
+  const updateDossiersStatus = (dossierIds: string[], newStatus: ProjectStatus, note?: string) => {
+    if (!['System Admin', 'Archive Manager', 'Data Entry'].includes(currentUser.role)) {
+      showToast(
+        language === 'ar' ? 'ليس لديك صلاحية تعديل حالة الدوسيه.' : 'You do not have permission to update dossier status.',
+        'error'
+      );
+      return;
+    }
+    const cleanIds = Array.from(new Set(dossierIds.map(id => id.trim()).filter(Boolean)));
+    if (cleanIds.length === 0) return;
+
+    const dossierSet = new Set(cleanIds);
+    const now = new Date().toISOString();
+    const displayTimestamp = new Date().toLocaleString();
+    const isFixedSlots = scopedMode === 'operations';
+    const statusNote =
+      note?.trim() ||
+      (language === 'ar'
+        ? `تحديث حالة الدوسيه بالكامل بواسطة ${currentUser.name}`
+        : `Bulk dossier status update by ${currentUser.name}`);
+
+    const updatedProjects = projects.map(p => {
+      const pDossierId = `${p.boxId}-${p.dossierNumber}`;
+      if (!dossierSet.has(pDossierId)) return p;
+      const historyEntry = {
+        status: newStatus,
+        timestamp: displayTimestamp,
+        note: statusNote,
+        user: currentUser.name,
+      };
+      return {
+        ...p,
+        status: newStatus,
+        lastUpdateDate: now,
+        statusHistory: [historyEntry, ...(p.statusHistory || [])],
+      };
+    });
+
+    const affectedBoxes = new Set<string>();
+    const updatedDossiers = dossiers.map(d => {
+      if (!dossierSet.has(d.id)) return d;
+      affectedBoxes.add(d.boxId);
+      const dProjects = updatedProjects.filter(p => p.boxId === d.boxId && p.dossierNumber === d.dossierNumber);
+      const dArch = dProjects.filter(p => p.status === 'Archived').length;
+      const dMiss = dProjects.filter(p => p.status === 'Missing').length;
+      const dPend = dProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 50 : dProjects.length;
+      const nextStatus: Dossier['status'] =
+        dProjects.length > 0 && dArch === expectedTotal
+          ? 'Archived'
+          : isFixedSlots
+          ? dArch > 0
+            ? 'Inprogress'
+            : 'Pending'
+          : dArch + dMiss > 0
+          ? 'Inprogress'
+          : 'Pending';
+      return {
+        ...d,
+        totalProjects: isFixedSlots ? d.totalProjects : dProjects.length,
+        archivedCount: dArch,
+        missingCount: dMiss,
+        pendingCount: dPend,
+        status: nextStatus,
+      };
+    });
+
+    const updatedBoxes = boxes.map(b => {
+      if (!affectedBoxes.has(b.boxCode)) return b;
+      const boxProjects = updatedProjects.filter(p => p.boxId === b.boxCode);
+      const boxDossiers = updatedDossiers.filter(d => d.boxId === b.boxCode);
+      const boxArchived = boxProjects.filter(p => p.status === 'Archived').length;
+      const boxMissing = boxProjects.filter(p => p.status === 'Missing').length;
+      const boxPending = boxProjects.filter(p => p.status === 'Pending').length;
+      const expectedTotal = isFixedSlots ? 300 : boxProjects.length;
+      const nextBoxStatus: Box['status'] =
+        boxProjects.length > 0
+          ? boxArchived === expectedTotal
+            ? 'Archived'
+            : 'Inprogress'
+          : b.status;
+      return {
+        ...b,
+        totalProjects: isFixedSlots ? b.totalProjects : boxProjects.length,
+        archivedProjects: boxArchived,
+        missingProjects: boxMissing,
+        pendingProjects: boxPending,
+        completedDossiers: boxDossiers.filter(d => d.status === 'Archived').length,
+        status: nextBoxStatus,
+        updatedAt: now,
+      };
+    });
+
+    setProjects(updatedProjects);
+    setDossiers(updatedDossiers);
+    setBoxes(updatedBoxes);
+
+    const affectedCount = updatedProjects.filter(p => dossierSet.has(`${p.boxId}-${p.dossierNumber}`)).length;
+    addAuditLog(
+      'Update Dossier Status',
+      'Dossier',
+      cleanIds.join(', '),
+      `Updated ${cleanIds.length} dossier(s) (${cleanIds.join(', ')}) [${affectedCount} items] to ${newStatus}. Note: ${statusNote}`
+    );
+    const statusLabelAr =
+      newStatus === 'Archived' ? 'مؤرشف (مكتمل)' : newStatus === 'Pending' ? 'قيد الانتظار' : 'مفقود';
+    showToast(
+      language === 'ar'
+        ? cleanIds.length === 1
+          ? `تم تحديث حالة الدوسيه ${cleanIds[0]} بالكامل إلى ${statusLabelAr} (${affectedCount} سجل).`
+          : `تم تحديث حالة ${cleanIds.length} دوسيهات إلى ${statusLabelAr} (${affectedCount} سجل).`
+        : `Updated ${cleanIds.length} dossier(s) (${affectedCount} items) to ${newStatus}.`,
+      'success'
+    );
   };
 
   const markNotificationAsRead = (id: string) => {
@@ -1270,10 +1783,14 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         importExcelProjects,
         createBox,
         commitMinutesPlan,
+        deleteArchiveUpload,
+        clearModuleArchive,
         forceCloseBox,
         reopenBox,
         updateProjectStatus,
         bulkUpdateProjectStatus,
+        updateBoxesStatus,
+        updateDossiersStatus,
         markNotificationAsRead,
         markAllNotificationsAsRead,
         addUser,

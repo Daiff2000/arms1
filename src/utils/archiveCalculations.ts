@@ -12,7 +12,7 @@ import { Box, Dossier, Project, ProjectStatus, DossierStatus, BoxStatus } from '
 export function buildBoxStructure(
   boxCode: string,
   firstJobId: number,
-  importedProjectsMap: Map<number, { dateApproved: string | null; sourceUpload?: string; status?: ProjectStatus }>,
+  importedProjectsMap: Map<number, { dateApproved: string | null; sourceUpload?: string; uploadId?: string; status?: ProjectStatus }>,
   existingBoxMeta?: Partial<Box>
 ): {
   box: Box;
@@ -55,11 +55,13 @@ export function buildBoxStructure(
       let status: ProjectStatus;
       let dateApproved: string | null = null;
       let sourceUpload = 'Reserved Slot';
+      let uploadId: string | undefined;
 
       if (importedData) {
         status = importedData.status || 'Archived';
         dateApproved = importedData.dateApproved;
         sourceUpload = importedData.sourceUpload || 'Excel Import';
+        uploadId = importedData.uploadId;
         if (status === 'Archived') dossierArchived++;
         else if (status === 'Missing') dossierMissing++;
         else dossierPending++;
@@ -87,6 +89,7 @@ export function buildBoxStructure(
         firstImportDate: importedData ? new Date().toISOString() : '',
         lastUpdateDate: new Date().toISOString(),
         sourceUpload,
+        ...(uploadId ? { uploadId } : {}),
         statusHistory: [
           {
             status,

@@ -730,6 +730,12 @@ async function startServer() {
           }
           const checked = validateStatePayload(req.body);
           if (checked.error || !checked.state) return res.status(400).json({ error: checked.error });
+          if (
+            user.role !== 'System Admin' &&
+            (checked.state.boxes.length < db.boxes.length || checked.state.uploadHistory.length < db.uploadHistory.length)
+          ) {
+            return res.status(403).json({ error: 'مسح الرفعات أو بيانات الأرشيف متاح لمدير النظام (System Admin) فقط.' });
+          }
           db.boxes = checked.state.boxes;
           db.dossiers = checked.state.dossiers;
           db.projects = checked.state.projects;
@@ -809,6 +815,17 @@ async function startServer() {
         }
         const checked = validateStatePayload(req.body);
         if (checked.error || !checked.state) return res.status(400).json({ error: checked.error });
+        if (user.role !== 'System Admin') {
+          const [counts] = await sql`SELECT
+            (SELECT COUNT(*)::int FROM arms_boxes) AS b_count,
+            (SELECT COUNT(*)::int FROM arms_upload_history) AS u_count`;
+          if (
+            checked.state.boxes.length < Number(counts?.b_count || 0) ||
+            checked.state.uploadHistory.length < Number(counts?.u_count || 0)
+          ) {
+            return res.status(403).json({ error: 'مسح الرفعات أو بيانات الأرشيف متاح لمدير النظام (System Admin) فقط.' });
+          }
+        }
         try {
           // Non-admins never receive the audit log, so merge their new entries into the existing log (append-only).
           const stateJson = JSON.stringify(checked.state);
@@ -893,6 +910,15 @@ async function startServer() {
               if (!store || typeof store !== 'object' || !Array.isArray(store.boxes) || !Array.isArray(store.dossiers) || !Array.isArray(store.projects)) {
                 return res.status(400).json({ error: `Invalid ${key} payload.` });
               }
+              if (user.role !== 'System Admin') {
+                const existing = db[key] || {};
+                const prevProjects = Array.isArray(existing.projects) ? existing.projects.length : 0;
+                const prevUploads = Array.isArray(existing.uploadHistory) ? existing.uploadHistory.length : 0;
+                const nextUploads = Array.isArray(store.uploadHistory) ? store.uploadHistory.length : 0;
+                if (store.projects.length < prevProjects || nextUploads < prevUploads) {
+                  return res.status(403).json({ error: 'مسح الرفعات أو بيانات القسم متاح لمدير النظام (System Admin) فقط.' });
+                }
+              }
               db[key] = store;
             }
           }
@@ -956,6 +982,22 @@ async function startServer() {
             const store = body[key];
             if (!store || typeof store !== 'object' || !Array.isArray(store.boxes) || !Array.isArray(store.dossiers) || !Array.isArray(store.projects)) {
               return res.status(400).json({ error: `Invalid ${key} payload.` });
+            }
+            if (user.role !== 'System Admin') {
+              const existingRows = await sql`SELECT data::text AS data_text FROM arms_module_records WHERE module_key = ${key} LIMIT 1`;
+              if (existingRows[0]?.data_text) {
+                try {
+                  const existing = JSON.parse(existingRows[0].data_text);
+                  const prevProjects = Array.isArray(existing?.projects) ? existing.projects.length : 0;
+                  const prevUploads = Array.isArray(existing?.uploadHistory) ? existing.uploadHistory.length : 0;
+                  const nextUploads = Array.isArray(store.uploadHistory) ? store.uploadHistory.length : 0;
+                  if (store.projects.length < prevProjects || nextUploads < prevUploads) {
+                    return res.status(403).json({ error: 'مسح الرفعات أو بيانات القسم متاح لمدير النظام (System Admin) فقط.' });
+                  }
+                } catch {
+                  /* ignore malformed legacy row */
+                }
+              }
             }
             const payload = JSON.stringify(store);
             await sql`INSERT INTO arms_module_records (module_key, data, updated_at)

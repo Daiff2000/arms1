@@ -20,11 +20,14 @@ import {
   Globe,
   Sun,
   Moon,
-  Grip,
+  LayoutGrid,
+  MessageSquareText,
 } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
+import { WorkspaceModule } from '../../types';
 import { IntercomLogo } from '../common/IntercomLogo';
 import { ArmsLogo } from '../common/ArmsLogo';
+import { PalletBoxesIcon, ReportPaperIcon } from '../common/WorkspaceIcons';
 
 export type ActiveTab =
   | 'dashboard'
@@ -56,7 +59,20 @@ export const TopNav: React.FC<TopNavProps> = ({
   onOpenProfile,
   breadcrumbs = [],
 }) => {
-  const { currentUser, notifications, language, setLanguage, logout, activeWorkspace, setActiveWorkspace } = useArchive();
+  const {
+    currentUser,
+    notifications,
+    language,
+    setLanguage,
+    logout,
+    activeWorkspace,
+    setActiveWorkspace,
+    operationsArchive,
+    palletArchive,
+    minutesArchive,
+  } = useArchive();
+
+  const isAr = language === 'ar';
 
   const [archiveDropdownOpen, setArchiveDropdownOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
@@ -113,12 +129,6 @@ export const TopNav: React.FC<TopNavProps> = ({
     ? 'text-slate-600 dark:text-neutral-300 hover:text-[#E52225] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60'
     : 'text-slate-600 dark:text-neutral-300 hover:text-[#0B56A8] dark:hover:text-white hover:bg-slate-50 dark:hover:bg-neutral-900/60';
 
-  const switcherBtnClass = isPallet
-    ? 'text-[#B45309] dark:text-amber-300 border-amber-200/80 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-950/30 hover:bg-amber-100/80 dark:hover:bg-amber-900/40'
-    : !isOperations
-    ? 'text-[#E52225] dark:text-red-300 border-red-200/80 dark:border-red-900/60 bg-red-50/80 dark:bg-red-950/30 hover:bg-red-100/80 dark:hover:bg-red-900/40'
-    : 'text-[#0B56A8] dark:text-blue-300 border-[#0B56A8]/25 bg-[#EAF2FB]/60 dark:bg-[#0B56A8]/15 hover:bg-[#EAF2FB] dark:hover:bg-[#0B56A8]/30';
-
   const mobileActiveBtnClass = isPallet
     ? 'bg-[#D97706] text-white'
     : !isOperations
@@ -136,6 +146,57 @@ export const TopNav: React.FC<TopNavProps> = ({
     : !isOperations
     ? 'text-[#E52225] dark:text-red-400 font-bold whitespace-nowrap'
     : 'text-[#0B56A8] dark:text-blue-400 font-bold whitespace-nowrap';
+
+  const workspaceDockItems: Array<{
+    id: WorkspaceModule;
+    shortLabel: string;
+    fullLabel: string;
+    boxCount: number;
+    icon: React.ComponentType<{ className?: string }>;
+    accentHex: string;
+    activeClass: string;
+    hoverClass: string;
+  }> = [
+    {
+      id: 'reports-archive',
+      shortLabel: isAr ? 'التشغيل' : 'Operations',
+      fullLabel: isAr ? 'أرشفة تقارير التشغيل' : 'Operations Reports Archive',
+      boxCount: operationsArchive.boxes.length,
+      icon: ReportPaperIcon,
+      accentHex: '#0B56A8',
+      activeClass:
+        'bg-white dark:bg-[#191B20] text-[#0B56A8] dark:text-blue-400 shadow-xs ring-1 ring-[#0B56A8]/20 dark:ring-blue-500/30',
+      hoverClass: 'hover:text-[#0B56A8] dark:hover:text-blue-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+    },
+    {
+      id: 'pallet-archive',
+      shortLabel: isAr ? 'الباليت' : 'Pallet',
+      fullLabel: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Archive',
+      boxCount: palletArchive.boxes.length,
+      icon: PalletBoxesIcon,
+      accentHex: '#D97706',
+      activeClass:
+        'bg-white dark:bg-[#191B20] text-[#B45309] dark:text-amber-400 shadow-xs ring-1 ring-amber-500/25 dark:ring-amber-500/30',
+      hoverClass: 'hover:text-[#B45309] dark:hover:text-amber-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+    },
+    {
+      id: 'minutes-archive',
+      shortLabel: isAr ? 'تعليقات الفروع' : 'Branches',
+      fullLabel: isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive',
+      boxCount: minutesArchive.boxes.length,
+      icon: MessageSquareText,
+      accentHex: '#E52225',
+      activeClass:
+        'bg-white dark:bg-[#191B20] text-[#E52225] dark:text-red-400 shadow-xs ring-1 ring-[#E52225]/25 dark:ring-red-500/30',
+      hoverClass: 'hover:text-[#E52225] dark:hover:text-red-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+    },
+  ];
+
+  const currentDockId: WorkspaceModule = isPallet
+    ? 'pallet-archive'
+    : isMinutes
+    ? 'minutes-archive'
+    : 'reports-archive';
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-[#111111] border-b border-slate-200 dark:border-neutral-800">
@@ -213,15 +274,61 @@ export const TopNav: React.FC<TopNavProps> = ({
             dir={language === 'ar' ? 'rtl' : 'ltr'}
             className="hidden lg:flex items-center justify-center gap-0.5 xl:gap-1.5 flex-1 min-w-0 px-2"
           >
-            <button
-              type="button"
-              onClick={() => setActiveWorkspace(null)}
-              title={language === 'ar' ? 'العودة إلى الأقسام الرئيسية' : 'Switch Section'}
-              className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 border ${switcherBtnClass}`}
+            {/* Creative Expanding 3-Section Workspace Dock */}
+            <div
+              role="group"
+              aria-label={isAr ? 'التبديل بين الأقسام' : 'Workspace Switcher'}
+              className="flex items-center gap-0.5 p-1 rounded-xl bg-slate-100/90 dark:bg-neutral-900/90 border border-slate-200/80 dark:border-neutral-800 shrink-0 me-1"
             >
-              <Grip className="w-4 h-4 shrink-0" />
-              <span>{language === 'ar' ? 'الأقسام' : 'Sections'}</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setActiveWorkspace(null)}
+                title={isAr ? 'بوابة الأقسام الرئيسية' : 'All Workspaces'}
+                aria-label={isAr ? 'بوابة الأقسام الرئيسية' : 'All Workspaces'}
+                className="p-1.5 rounded-lg text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/80 dark:hover:bg-neutral-800 transition-all duration-200 hover:scale-105 shrink-0"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </button>
+
+              <span className="h-4 w-px bg-slate-200 dark:bg-neutral-800 mx-0.5" aria-hidden="true" />
+
+              {workspaceDockItems.map(ws => {
+                const WsIcon = ws.icon;
+                const isActive = currentDockId === ws.id;
+                return (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    onClick={() => setActiveWorkspace(ws.id)}
+                    title={`${ws.fullLabel} (${ws.boxCount} ${isAr ? 'بوكس' : 'boxes'})`}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`group/ws relative flex items-center rounded-lg text-xs font-bold transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] whitespace-nowrap shrink-0 overflow-hidden ${
+                      isActive
+                        ? `gap-1.5 px-2.5 py-1.5 ${ws.activeClass}`
+                        : `gap-0 hover:gap-1.5 px-2 hover:px-2.5 py-1.5 text-slate-500 dark:text-neutral-400 ${ws.hoverClass}`
+                    }`}
+                  >
+                    <WsIcon className="w-3.5 h-3.5 shrink-0 transition-transform duration-300 group-hover/ws:scale-110" />
+                    <span
+                      className={`overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        isActive
+                          ? 'max-w-[120px] opacity-100'
+                          : 'max-w-0 opacity-0 xl:group-hover/ws:max-w-[120px] xl:group-hover/ws:opacity-100'
+                      }`}
+                    >
+                      {ws.shortLabel}
+                    </span>
+                    {isActive && (
+                      <span
+                        className="absolute inset-x-2 bottom-0 h-[2px] rounded-full"
+                        style={{ backgroundColor: ws.accentHex }}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
             <button
               type="button"
@@ -280,7 +387,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                       <Archive className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="font-bold">{language === 'ar' ? 'البوكسات (Boxes)' : 'Boxes'}</div>
+                      <div className="font-bold">{language === 'ar' ? 'البوكسات' : 'Boxes'}</div>
                       <div className="text-[10px] text-slate-400">
                         {isMinutes
                           ? language === 'ar'
@@ -311,7 +418,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                       <FolderArchive className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="font-bold">{language === 'ar' ? 'الدوسيهات (Dossiers)' : 'Dossiers'}</div>
+                      <div className="font-bold">{language === 'ar' ? 'الدوسيهات' : 'Dossiers'}</div>
                       <div className="text-[10px] text-slate-400">
                         {isMinutes
                           ? language === 'ar'
@@ -345,11 +452,11 @@ export const TopNav: React.FC<TopNavProps> = ({
                       <div className="font-bold">
                         {isMinutes
                           ? language === 'ar'
-                            ? 'الفروع (Branches)'
+                            ? 'الفروع'
                             : 'Branches'
                           : language === 'ar'
-                          ? 'المشاريع (Projects)'
-                          : 'Projects Directory'}
+                          ? 'المشاريع'
+                          : 'Projects'}
                       </div>
                       <div className="text-[10px] text-slate-400">
                         {isMinutes
@@ -526,13 +633,43 @@ export const TopNav: React.FC<TopNavProps> = ({
         {/* Tablet & Mobile Navigation Strip */}
         <div className="lg:hidden border-t border-slate-100 dark:border-neutral-800 py-2">
           <div className="flex items-center gap-1 overflow-x-auto pb-1">
-            <button
-              onClick={() => setActiveWorkspace(null)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-lg shrink-0 transition-colors border ${switcherBtnClass}`}
-            >
-              <Grip className="w-3.5 h-3.5" />
-              <span>{language === 'ar' ? 'الأقسام' : 'Sections'}</span>
-            </button>
+            <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-100 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveWorkspace(null)}
+                title={isAr ? 'بوابة الأقسام' : 'All Workspaces'}
+                className="p-1.5 rounded-md text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white shrink-0"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </button>
+              <span className="h-3.5 w-px bg-slate-200 dark:bg-neutral-800" aria-hidden="true" />
+              {workspaceDockItems.map(ws => {
+                const WsIcon = ws.icon;
+                const isActive = currentDockId === ws.id;
+                return (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    onClick={() => setActiveWorkspace(ws.id)}
+                    className={`relative flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold whitespace-nowrap shrink-0 transition-all overflow-hidden ${
+                      isActive
+                        ? ws.activeClass
+                        : 'text-slate-500 dark:text-neutral-400'
+                    }`}
+                  >
+                    <WsIcon className="w-3.5 h-3.5 shrink-0" />
+                    {isActive && <span>{ws.shortLabel}</span>}
+                    {isActive && (
+                      <span
+                        className="absolute inset-x-1.5 bottom-0 h-[2px]"
+                        style={{ backgroundColor: ws.accentHex }}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
             <button
               onClick={() => onNavigate('dashboard')}

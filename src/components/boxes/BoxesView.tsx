@@ -4,10 +4,11 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Archive, Printer, Plus, Search, ArrowRight, Lock, Unlock } from 'lucide-react';
+import { Archive, Printer, Plus, Search, ArrowRight, Lock, Unlock, Trash2 } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
 import { Box } from '../../types';
 import { ActiveTab } from '../navigation/TopNav';
+import { DeleteUploadModal } from '../common/DeleteUploadModal';
 
 interface BoxesViewProps {
   onNavigate: (tab: ActiveTab, param?: string) => void;
@@ -22,7 +23,9 @@ export const BoxesView: React.FC<BoxesViewProps> = ({
   initialOpenCreate = false,
   onCreateModalConsumed,
 }) => {
-  const { boxes, currentUser, forceCloseBox, reopenBox, createBox, showToast, language } = useArchive();
+  const { boxes, uploadHistory, currentUser, forceCloseBox, reopenBox, createBox, showToast, language } = useArchive();
+  const isSystemAdmin = currentUser.role === 'System Admin';
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Archived' | 'Inprogress' | 'ForceClosed'>('all');
@@ -102,17 +105,23 @@ export const BoxesView: React.FC<BoxesViewProps> = ({
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <Archive className="w-6 h-6 text-[#0B56A8] dark:text-blue-400" />
-            <span>{language === 'ar' ? 'إدارة البوكسات (Boxes)' : 'Box Management'}</span>
+            <span>{language === 'ar' ? 'إدارة البوكسات' : 'Box Management'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {language === 'ar'
-              ? 'كل بوكس يحتوي بدقة على 6 دوسيهات و 300 مشروع (Job Slots).'
-              : 'Each archive box strictly holds 6 dossiers and 300 project slots.'}
-          </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {currentUser.role === 'System Admin' && (
+        <div className="flex flex-wrap items-center gap-2">
+          {isSystemAdmin && (boxes.length > 0 || uploadHistory.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setDeleteModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#E52225] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 hover:bg-[#E52225] hover:text-white rounded-lg transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{language === 'ar' ? 'مسح رفعة / بيانات' : 'Delete Upload / Data'}</span>
+            </button>
+          )}
+
+          {isSystemAdmin && (
             <button
               onClick={() => {
                 const next = getNextBoxSuggestion();
@@ -136,6 +145,12 @@ export const BoxesView: React.FC<BoxesViewProps> = ({
           </button>
         </div>
       </div>
+
+      <DeleteUploadModal
+        isOpen={deleteModalOpen}
+        scope="operations"
+        onClose={() => setDeleteModalOpen(false)}
+      />
 
       {/* Filters & Search */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white dark:bg-[#111111] p-3 rounded-xl border border-slate-200 dark:border-neutral-800">

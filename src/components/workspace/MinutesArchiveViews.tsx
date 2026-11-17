@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   X,
   CheckSquare,
+  Trash2,
 } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
 import { useArchive } from '../../context/ArchiveContext';
@@ -35,7 +36,12 @@ import { MinutesPlanImport } from './MinutesPlanImport';
 import { Box, Dossier, Project, ProjectStatus } from '../../types';
 import { LabelsView } from '../labels/LabelsView';
 import { weekEndOf, weekStartOf } from '../../utils/minutesPlan';
-import { CommentsReportColumn, exportCommentsReportToPDF } from '../../utils/reportExporter';
+import {
+  CommentsBoxDistributionItem,
+  CommentsReportColumn,
+  exportCommentsReportToPDF,
+} from '../../utils/reportExporter';
+import { DeleteUploadModal } from '../common/DeleteUploadModal';
 import logoColor from '../../assets/logo.png';
 import armsLogoLight from '../../assets/arms-logo.png';
 
@@ -73,11 +79,14 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     language,
     updateProjectStatus,
     bulkUpdateProjectStatus,
+    updateBoxesStatus,
+    updateDossiersStatus,
     showToast,
   } = useArchive();
 
   const isAr = language === 'ar';
   const DirectionalArrow = isAr ? ArrowLeft : ArrowRight;
+  const isSystemAdmin = currentUser.role === 'System Admin';
   const canEdit = ['System Admin', 'Archive Manager', 'Data Entry'].includes(currentUser.role);
 
   const { boxes, dossiers, projects, uploadHistory } = minutesArchive;
@@ -109,16 +118,42 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     return map;
   }, [projects]);
 
+  const uniqueRegions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of projects) {
+      const r = (p.region || '').trim();
+      if (r) set.add(r);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
+  }, [projects]);
+
   // Shared UI & filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
   const [boxFilter, setBoxFilter] = useState<string>('all');
   const [dossierFilter, setDossierFilter] = useState<string>('all');
+  const [regionFilter, setRegionFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | ProjectStatus>('all');
   const [boxStatusFilter, setBoxStatusFilter] = useState<'all' | 'Inprogress' | 'Archived'>('all');
   const [dossierStatusFilter, setDossierStatusFilter] = useState<'all' | 'Pending' | 'Inprogress' | 'Archived'>('all');
   const [archiveSubTab, setArchiveSubTab] = useState<'boxes' | 'dossiers' | 'branches'>('boxes');
+
+  // Boxes page selection & modal
+  const [selectedBoxCodes, setSelectedBoxCodes] = useState<string[]>([]);
+  const [boxBulkNote, setBoxBulkNote] = useState('');
+  const [editingBox, setEditingBox] = useState<Box | null>(null);
+  const [editBoxStatus, setEditBoxStatus] = useState<ProjectStatus>('Archived');
+  const [editBoxNote, setEditBoxNote] = useState('');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [targetUploadId, setTargetUploadId] = useState<string | null>(null);
+
+  // Dossiers selection & modal
+  const [selectedDossierIds, setSelectedDossierIds] = useState<string[]>([]);
+  const [dossierBulkNote, setDossierBulkNote] = useState('');
+  const [editingDossier, setEditingDossier] = useState<Dossier | null>(null);
+  const [editDossierStatus, setEditDossierStatus] = useState<ProjectStatus>('Archived');
+  const [editDossierNote, setEditDossierNote] = useState('');
 
   // Branches page selection & modals
   const [selectedJobIds, setSelectedJobIds] = useState<number[]>([]);
@@ -133,7 +168,17 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
   const pageSize = 25;
 
   // Reports state
-  const [selectedReportTab, setSelectedReportTab] = useState<'summary' | 'dossiers' | 'branches'>('branches');
+  const [selectedReportTab, setSelectedReportTab] = useState<
+    | 'branches'
+    | 'archived-boxes'
+    | 'inprogress-boxes'
+    | 'dossiers'
+    | 'box-details'
+    | 'distribution'
+    | 'archive-summary'
+  >('branches');
+  const [reportBoxFilter, setReportBoxFilter] = useState<string>('all');
+  const [reportSearch, setReportSearch] = useState('');
   const [exportingPdf, setExportingPdf] = useState(false);
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -165,6 +210,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     setDateTo('');
     setBoxFilter('all');
     setDossierFilter('all');
+    setRegionFilter('all');
     setStatusFilter('all');
     setBoxStatusFilter('all');
     setDossierStatusFilter('all');
@@ -194,6 +240,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     if (projectsFilter && projectsFilter.startsWith('box:')) {
       setBoxFilter(projectsFilter.slice(4));
       setDossierFilter('all');
+      setRegionFilter('all');
       setStatusFilter('all');
       setDateFrom('');
       setDateTo('');
@@ -203,6 +250,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       setStatusFilter(projectsFilter as ProjectStatus);
       setBoxFilter('all');
       setDossierFilter('all');
+      setRegionFilter('all');
       setDateFrom('');
       setDateTo('');
       setSearchTerm('');
@@ -212,6 +260,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       setStatusFilter('all');
       setBoxFilter('all');
       setDossierFilter('all');
+      setRegionFilter('all');
       setDateFrom('');
       setDateTo('');
       setCurrentPage(1);
@@ -220,6 +269,8 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
 
   useEffect(() => {
     setSelectedJobIds([]);
+    setSelectedBoxCodes([]);
+    setSelectedDossierIds([]);
     setCurrentPage(1);
   }, [activeTab, selectedBoxId, selectedDossierId]);
 
@@ -377,12 +428,12 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                   placeholder={
                     mode === 'boxes'
                       ? isAr
-                        ? 'كود البوكس (C1)، اسم فرع، إرسالية...'
-                        : 'Box (C1), branch, shipment...'
+                        ? 'كود البوكس (C13)، اسم فرع، إرسالية...'
+                        : 'Box (C13), branch, shipment...'
                       : mode === 'dossiers'
                       ? isAr
-                        ? 'رقم الدوسيه (C1-1)، أسبوع، فرع...'
-                        : 'Dossier (C1-1), week, branch...'
+                        ? 'رقم الدوسيه (C13-1)، أسبوع، شهر، فرع...'
+                        : 'Dossier (C13-1), period, branch...'
                       : isAr
                       ? 'اسم الفرع، رقم الإرسالية، كود...'
                       : 'Branch name, shipment no., code...'
@@ -494,21 +545,41 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             </select>
 
             {mode === 'branches' && (
-              <select
-                value={dossierFilter}
-                onChange={e => {
-                  setDossierFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="px-3 py-1.5 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225]"
-              >
-                <option value="all">{isAr ? 'كل الدوسيهات' : 'All Dossiers'}</option>
-                {activeDossierChoices.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {d.id} ({fmtDate(d.weekStart)})
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={dossierFilter}
+                  onChange={e => {
+                    setDossierFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="px-3 py-1.5 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225]"
+                >
+                  <option value="all">{isAr ? 'كل الدوسيهات' : 'All Dossiers'}</option>
+                  {activeDossierChoices.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.id} ({fmtDate(d.weekStart)})
+                    </option>
+                  ))}
+                </select>
+
+                {uniqueRegions.length > 0 && (
+                  <select
+                    value={regionFilter}
+                    onChange={e => {
+                      setRegionFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="px-3 py-1.5 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225]"
+                  >
+                    <option value="all">{isAr ? 'كل المناطق' : 'All Regions'}</option>
+                    {uniqueRegions.map(reg => (
+                      <option key={reg} value={reg}>
+                        {reg}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
             )}
           </div>
         )}
@@ -533,12 +604,6 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
   };
 
   // Totals (unfiltered for global summary)
-  const totalBranches = projects.length;
-  const archivedCount = projects.filter(p => p.status === 'Archived').length;
-  const missingCount = projects.filter(p => p.status === 'Missing').length;
-  const pendingCount = projects.filter(p => p.status === 'Pending').length;
-  const completedDossiersCount = dossiers.filter(d => d.status === 'Archived').length;
-  const archivedPercent = totalBranches > 0 ? ((archivedCount / totalBranches) * 100).toFixed(1) : '0.0';
 
   const toggleSelectId = (jobId: number) => {
     setSelectedJobIds(prev => (prev.includes(jobId) ? prev.filter(id => id !== jobId) : [...prev, jobId]));
@@ -565,6 +630,322 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     updateProjectStatus(activeDetailBranch.jobId, detailStatus, detailNote.trim() || undefined);
     setDetailNote('');
   };
+
+  const toggleSelectBox = (boxCode: string) => {
+    setSelectedBoxCodes(prev => (prev.includes(boxCode) ? prev.filter(c => c !== boxCode) : [...prev, boxCode]));
+  };
+
+  const handleBulkBoxesStatus = (status: ProjectStatus) => {
+    if (!canEdit || selectedBoxCodes.length === 0) return;
+    updateBoxesStatus(selectedBoxCodes, status, boxBulkNote.trim() || undefined);
+    setSelectedBoxCodes([]);
+    setBoxBulkNote('');
+  };
+
+  const openBoxStatusModal = (b: Box) => {
+    setEditingBox(b);
+    setEditBoxStatus(
+      b.status === 'Archived'
+        ? 'Archived'
+        : b.missingProjects > 0 && b.archivedProjects === 0
+        ? 'Missing'
+        : b.pendingProjects === b.totalProjects && b.totalProjects > 0
+        ? 'Pending'
+        : 'Archived'
+    );
+    setEditBoxNote('');
+  };
+
+  const handleSaveSingleBoxStatus = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBox || !canEdit) return;
+    updateBoxesStatus([editingBox.boxCode], editBoxStatus, editBoxNote.trim() || undefined);
+    setEditingBox(null);
+    setEditBoxNote('');
+  };
+
+  const renderBoxStatusModal = () =>
+    editingBox ? (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+        <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-2xl max-w-sm w-full p-5 space-y-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Archive className="w-4 h-4 text-[#E52225]" />
+              <span>{isAr ? `تحديث حالة البوكس ${editingBox.boxCode}` : `Update Box ${editingBox.boxCode} Status`}</span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {isAr
+                ? `سيتم تطبيق الحالة الجديدة على البوكس بالكامل (${editingBox.totalProjects} فرع / إرسالية).`
+                : `Applies to the entire box (${editingBox.totalProjects} branch shipments).`}
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveSingleBoxStatus} className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1">
+                {isAr ? 'اختر الحالة الجديدة للبوكس' : 'Select New Box Status'}
+              </label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['Archived', 'Pending', 'Missing'] as const).map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setEditBoxStatus(s)}
+                    className={`py-2 px-1.5 text-xs font-bold rounded-lg border transition-colors ${
+                      editBoxStatus === s
+                        ? s === 'Archived'
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : s === 'Pending'
+                          ? 'border-slate-700 bg-slate-700 text-white'
+                          : 'border-[#E52225] bg-[#E52225] text-white'
+                        : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
+                    }`}
+                  >
+                    {s === 'Archived'
+                      ? isAr
+                        ? 'مؤرشف'
+                        : 'Archived'
+                      : s === 'Pending'
+                      ? isAr
+                        ? 'انتظار'
+                        : 'Pending'
+                      : isAr
+                      ? 'مفقود'
+                      : 'Missing'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1">
+                {isAr ? 'ملاحظة التحديث (اختياري)' : 'Update Note (optional)'}
+              </label>
+              <input
+                type="text"
+                placeholder={isAr ? 'مثال: تم أرشفة البوكس بالكامل...' : 'Optional update note...'}
+                value={editBoxNote}
+                onChange={e => setEditBoxNote(e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditingBox(null)}
+                className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 dark:text-neutral-400 dark:hover:text-white rounded-lg"
+              >
+                {isAr ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button type="submit" className="px-4 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg">
+                {isAr ? 'تطبيق على البوكس' : 'Apply to Box'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    ) : null;
+
+  const toggleSelectDossier = (dossierId: string) => {
+    setSelectedDossierIds(prev => (prev.includes(dossierId) ? prev.filter(id => id !== dossierId) : [...prev, dossierId]));
+  };
+
+  const handleBulkDossiersStatus = (status: ProjectStatus) => {
+    if (!canEdit || selectedDossierIds.length === 0) return;
+    updateDossiersStatus(selectedDossierIds, status, dossierBulkNote.trim() || undefined);
+    setSelectedDossierIds([]);
+    setDossierBulkNote('');
+  };
+
+  const openDossierStatusModal = (d: Dossier) => {
+    setEditingDossier(d);
+    setEditDossierStatus(
+      d.status === 'Archived'
+        ? 'Archived'
+        : d.missingCount > 0 && d.archivedCount === 0
+        ? 'Missing'
+        : d.pendingCount === d.totalProjects && d.totalProjects > 0
+        ? 'Pending'
+        : 'Archived'
+    );
+    setEditDossierNote('');
+  };
+
+  const handleSaveSingleDossierStatus = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDossier || !canEdit) return;
+    updateDossiersStatus([editingDossier.id], editDossierStatus, editDossierNote.trim() || undefined);
+    setEditingDossier(null);
+    setEditDossierNote('');
+  };
+
+  const renderDossierBulkBar = (visibleDossiers: Dossier[]) => {
+    if (!canEdit || selectedDossierIds.length === 0) return null;
+    const visibleIds = new Set(visibleDossiers.map(d => d.id));
+    const selectedVisibleCount = visibleDossiers.filter(d => selectedDossierIds.includes(d.id)).length;
+    const selectedBranchTotal = dossiers
+      .filter(d => selectedDossierIds.includes(d.id))
+      .reduce((sum, d) => sum + d.totalProjects, 0);
+
+    return (
+      <div className="bg-red-50/90 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 rounded-xl p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-extrabold text-[#E52225] dark:text-red-300">
+            {isAr
+              ? `تم تحديد ${selectedDossierIds.length} دوسيه (${selectedBranchTotal} فرع)`
+              : `${selectedDossierIds.length} dossier(s) selected (${selectedBranchTotal} branches)`}
+          </span>
+          {visibleDossiers.length > 0 && selectedVisibleCount < visibleDossiers.length && (
+            <button
+              type="button"
+              onClick={() => setSelectedDossierIds(prev => Array.from(new Set([...prev, ...visibleIds])))}
+              className="text-[11px] font-semibold underline text-slate-700 dark:text-neutral-200 hover:text-[#E52225]"
+            >
+              {isAr ? `تحديد الكل (${visibleDossiers.length})` : `Select all (${visibleDossiers.length})`}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setSelectedDossierIds([])}
+            className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white"
+          >
+            {isAr ? 'إلغاء التحديد' : 'Clear'}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={dossierBulkNote}
+            onChange={e => setDossierBulkNote(e.target.value)}
+            placeholder={isAr ? 'ملاحظة على تحديث الدوسيه (اختياري)...' : 'Dossier status note (optional)...'}
+            className="px-2.5 py-1.5 text-xs bg-white dark:bg-[#111111] border border-red-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225] w-52"
+          />
+          <button
+            type="button"
+            onClick={() => handleBulkDossiersStatus('Archived')}
+            className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+          >
+            {isAr ? 'تعيين كمؤرشف بالكامل' : 'Mark Archived'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleBulkDossiersStatus('Pending')}
+            className="px-3 py-1.5 text-xs font-bold text-white bg-slate-600 hover:bg-slate-700 rounded-lg transition-colors"
+          >
+            {isAr ? 'قيد الانتظار' : 'Mark Pending'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleBulkDossiersStatus('Missing')}
+            className="px-3 py-1.5 text-xs font-bold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg transition-colors"
+          >
+            {isAr ? 'تعيين كمفقود' : 'Mark Missing'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDossierStatusModal = () =>
+    editingDossier ? (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+        <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-2xl max-w-sm w-full p-5 space-y-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <FolderArchive className="w-4 h-4 text-[#E52225]" />
+              <span>{isAr ? `تحديث حالة الدوسيه ${editingDossier.id}` : `Update Dossier ${editingDossier.id} Status`}</span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {isAr
+                ? `سيتم تطبيق الحالة الجديدة على الدوسيه بالكامل (${editingDossier.totalProjects} فرع / إرسالية).`
+                : `Applies to the entire dossier (${editingDossier.totalProjects} branch shipments).`}
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveSingleDossierStatus} className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1">
+                {isAr ? 'اختر الحالة الجديدة للدوسيه' : 'Select New Dossier Status'}
+              </label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['Archived', 'Pending', 'Missing'] as const).map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setEditDossierStatus(s)}
+                    className={`py-2 px-1.5 text-xs font-bold rounded-lg border transition-colors ${
+                      editDossierStatus === s
+                        ? s === 'Archived'
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : s === 'Pending'
+                          ? 'border-slate-700 bg-slate-700 text-white'
+                          : 'border-[#E52225] bg-[#E52225] text-white'
+                        : 'border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
+                    }`}
+                  >
+                    {s === 'Archived'
+                      ? isAr
+                        ? 'مؤرشف'
+                        : 'Archived'
+                      : s === 'Pending'
+                      ? isAr
+                        ? 'انتظار'
+                        : 'Pending'
+                      : isAr
+                      ? 'مفقود'
+                      : 'Missing'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-neutral-300 mb-1">
+                {isAr ? 'ملاحظة التحديث (اختياري)' : 'Update Note (optional)'}
+              </label>
+              <input
+                type="text"
+                placeholder={isAr ? 'مثال: تم أرشفة الدوسيه بالكامل...' : 'Optional update note...'}
+                value={editDossierNote}
+                onChange={e => setEditDossierNote(e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditingDossier(null)}
+                className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 dark:text-neutral-400 dark:hover:text-white rounded-lg"
+              >
+                {isAr ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button type="submit" className="px-4 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg">
+                {isAr ? 'تطبيق على الدوسيه' : 'Apply to Dossier'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    ) : null;
+
+  const renderDeleteUploadModal = () => (
+    <DeleteUploadModal
+      isOpen={deleteModalOpen}
+      scope="minutes"
+      initialUploadId={targetUploadId}
+      onClose={() => {
+        setDeleteModalOpen(false);
+        setTargetUploadId(null);
+      }}
+      onCompleted={() => {
+        setSelectedBoxCodes([]);
+        setSelectedJobIds([]);
+      }}
+    />
+  );
 
   // Shared Modals (Branch Details + Quick Edit)
   const renderBranchModals = () => {
@@ -932,16 +1313,11 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
           <div>
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
               {isAr ? 'لوحة المتابعة والتحكم' : 'Workspace Dashboard'}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'نظام البوكسات الأسبوعي: كل بوكس يحتوي على 6 دوسيهات، وكل دوسيه يمثل أسبوع تشغيل للفروع والإرساليات.'
-                : 'Weekly box structure: 6 weekly dossiers per box tracking branch shipments and operational start dates.'}
-            </p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1031,7 +1407,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 {dashCompletedDossiers} / {dashDossiers.length}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                {isAr ? '6 دوسيهات (أسابيع) / بوكس' : '6 weekly dossiers / box'}
+                {isAr ? 'شهري (C13-C14) · أسبوعي 6/بوكس (C15+)' : 'Monthly (C13-C14) · 6 weekly/box (C15+)'}
               </div>
             </button>
           </div>
@@ -1109,8 +1485,15 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                           </span>
                           <div className="min-w-0">
                             <div className="text-xs font-bold text-slate-900 dark:text-white">
-                              {ds.length} / 6 {isAr ? 'دوسيهات (أسابيع)' : 'dossiers (weeks)'} · {b.totalProjects}{' '}
-                              {isAr ? 'فرع' : 'branches'}
+                              {ds.length} / {b.totalDossiers || 6}{' '}
+                              {b.totalDossiers === 2
+                                ? isAr
+                                  ? 'دوسيهات (شهور)'
+                                  : 'dossiers (months)'
+                                : isAr
+                                ? 'دوسيهات (أسابيع)'
+                                : 'dossiers (weeks)'}{' '}
+                              · {b.totalProjects} {isAr ? 'فرع' : 'branches'}
                             </div>
                             <div className="text-[11px] text-slate-400 truncate">
                               {ds[0]?.weekStart ? `${fmtDate(ds[0].weekStart)} → ${fmtDate(ds[ds.length - 1]?.weekEnd)}` : '—'}
@@ -1286,6 +1669,12 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       return true;
     });
 
+    const allBoxesSelected =
+      filteredBoxes.length > 0 && filteredBoxes.every(b => selectedBoxCodes.includes(b.boxCode));
+    const selectedBoxesBranchTotal = filteredBoxes
+      .filter(b => selectedBoxCodes.includes(b.boxCode))
+      .reduce((sum, b) => sum + b.totalProjects, 0);
+
     return (
       <div className="space-y-6">
         {activeTab === 'archive' && renderArchiveSubTabs()}
@@ -1293,20 +1682,28 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
           <div>
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <Archive className="w-6 h-6 text-[#E52225]" />
               <span>{isAr ? 'البوكسات' : 'Archive Boxes'}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'كل بوكس يحتوي على 6 دوسيهات، وكل دوسيه يضم أسبوع تشغيل كامل.'
-                : 'Each box contains 6 weekly dossiers (Sun → Thu).'}
-            </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {isSystemAdmin && (boxes.length > 0 || projects.length > 0 || uploadHistory.length > 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetUploadId(null);
+                  setDeleteModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#E52225] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 hover:bg-[#E52225] hover:text-white rounded-lg transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isAr ? 'مسح رفعة / بيانات' : 'Delete Upload / Data'}</span>
+              </button>
+            )}
             {canEdit && (
               <button
                 type="button"
@@ -1328,16 +1725,91 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
           </div>
         </div>
 
+        {renderDeleteUploadModal()}
+
         {renderDateStatusFilterCard('boxes', filteredBoxes.length)}
+
+        {/* Bulk Box Selection & Status Update Bar */}
+        {canEdit && selectedBoxCodes.length > 0 && (
+          <div className="bg-red-50/90 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 rounded-xl p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-extrabold text-[#E52225] dark:text-red-300">
+                {isAr
+                  ? `تم تحديد ${selectedBoxCodes.length} بوكس (${selectedBoxesBranchTotal} فرع)`
+                  : `${selectedBoxCodes.length} box(es) selected (${selectedBoxesBranchTotal} branches)`}
+              </span>
+              {selectedBoxCodes.length < filteredBoxes.length && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedBoxCodes(filteredBoxes.map(b => b.boxCode))}
+                  className="text-[11px] font-semibold underline text-slate-700 dark:text-neutral-200 hover:text-[#E52225]"
+                >
+                  {isAr ? `تحديد الكل (${filteredBoxes.length})` : `Select all (${filteredBoxes.length})`}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedBoxCodes([])}
+                className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white"
+              >
+                {isAr ? 'إلغاء التحديد' : 'Clear'}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={boxBulkNote}
+                onChange={e => setBoxBulkNote(e.target.value)}
+                placeholder={isAr ? 'ملاحظة على تحديث البوكس (اختياري)...' : 'Box status note (optional)...'}
+                className="px-2.5 py-1.5 text-xs bg-white dark:bg-[#111111] border border-red-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#E52225] w-52"
+              />
+              <button
+                type="button"
+                onClick={() => handleBulkBoxesStatus('Archived')}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+              >
+                {isAr ? 'تعيين كمؤرشف بالكامل' : 'Mark Archived'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBulkBoxesStatus('Pending')}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-slate-600 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                {isAr ? 'قيد الانتظار' : 'Mark Pending'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBulkBoxesStatus('Missing')}
+                className="px-3 py-1.5 text-xs font-bold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg transition-colors"
+              >
+                {isAr ? 'تعيين كمفقود' : 'Mark Missing'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-start">
               <thead className="bg-slate-50 dark:bg-neutral-900/80 text-slate-500 text-[11px] font-semibold border-b border-slate-200 dark:border-neutral-800">
                 <tr>
+                  {canEdit && (
+                    <th className="px-3 py-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={allBoxesSelected}
+                        onChange={e =>
+                          setSelectedBoxCodes(e.target.checked ? filteredBoxes.map(b => b.boxCode) : [])
+                        }
+                        title={isAr ? 'تحديد كل البوكسات' : 'Select all boxes'}
+                        className="rounded border-slate-300 text-[#E52225] focus:ring-[#E52225]"
+                      />
+                    </th>
+                  )}
                   <th className="px-4 py-3 text-start">{isAr ? 'كود البوكس' : 'Box Code'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'نطاق الأسابيع' : 'Weeks Range'}</th>
-                  <th className="px-4 py-3 text-center">{isAr ? 'الدوسيهات (الأسابيع)' : 'Dossiers (Weeks)'}</th>
+                  <th className="px-4 py-3 text-start">{isAr ? 'نطاق الفترة' : 'Period Range'}</th>
+                  <th className="px-4 py-3 text-center">{isAr ? 'الدوسيهات' : 'Dossiers'}</th>
                   <th className="px-4 py-3 text-end">{isAr ? 'الفروع المؤرشفة' : 'Archived Branches'}</th>
                   <th className="px-4 py-3 text-end text-[#E52225]">{isAr ? 'مفقود' : 'Missing'}</th>
                   <th className="px-4 py-3 text-end text-slate-400">{isAr ? 'انتظار' : 'Pending'}</th>
@@ -1352,6 +1824,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                   const firstWk = boxDossiers[0]?.weekStart;
                   const lastWk = boxDossiers[boxDossiers.length - 1]?.weekEnd;
                   const pct = box.totalProjects > 0 ? Math.round((box.archivedProjects / box.totalProjects) * 100) : 0;
+                  const isSelected = selectedBoxCodes.includes(box.boxCode);
                   return (
                     <tr
                       key={box.id}
@@ -1359,8 +1832,22 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                         onSelectBox(box.boxCode);
                         onNavigate('box-detail', box.boxCode);
                       }}
-                      className="hover:bg-slate-50/70 dark:hover:bg-neutral-900/40 cursor-pointer transition-colors group"
+                      className={`cursor-pointer transition-colors group ${
+                        isSelected
+                          ? 'bg-red-50/60 dark:bg-red-950/20'
+                          : 'hover:bg-slate-50/70 dark:hover:bg-neutral-900/40'
+                      }`}
                     >
+                      {canEdit && (
+                        <td className="px-3 py-3 text-center" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectBox(box.boxCode)}
+                            className="rounded border-slate-300 text-[#E52225] focus:ring-[#E52225]"
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3 font-extrabold text-sm font-mono text-[#E52225] dark:text-red-400">
                         {box.boxCode}
                       </td>
@@ -1368,7 +1855,10 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                         {firstWk ? `${fmtDate(firstWk)} → ${fmtDate(lastWk)}` : '—'}
                       </td>
                       <td className="px-4 py-3 text-center font-semibold tabular-nums">
-                        {boxDossiers.length} / 6 <span className="text-[10px] text-slate-400">({box.completedDossiers} {isAr ? 'مكتمل' : 'done'})</span>
+                        {boxDossiers.length} / {box.totalDossiers || 6}{' '}
+                        <span className="text-[10px] text-slate-400">
+                          ({box.completedDossiers} {isAr ? 'مكتمل' : 'done'})
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-end font-bold tabular-nums">
                         {box.archivedProjects} / {box.totalProjects}
@@ -1392,6 +1882,16 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       <td className="px-4 py-3">{statusBadge(box.status)}</td>
                       <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1">
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => openBoxStatusModal(box)}
+                              title={isAr ? 'تحديد حالة البوكس بالكامل' : 'Change Box Status'}
+                              className="p-1.5 text-slate-500 hover:text-[#E52225] rounded hover:bg-red-50 dark:hover:bg-neutral-900"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onNavigate('labels', box.boxCode)}
@@ -1417,7 +1917,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 })}
                 {filteredBoxes.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-12 text-center text-slate-400">
+                    <td colSpan={canEdit ? 10 : 9} className="py-12 text-center text-slate-400">
                       {isAr ? 'لا توجد بوكسات مطابقة حالياً — ارفع شيت الفروع أولاً.' : 'No boxes found yet — import a plan sheet first.'}
                     </td>
                   </tr>
@@ -1426,6 +1926,8 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             </table>
           </div>
         </div>
+
+        {renderBoxStatusModal()}
       </div>
     );
   }
@@ -1445,6 +1947,8 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
     }
 
     const boxDossiers = sortedDossiers.filter(d => d.boxId === box.boxCode);
+    const boxCap = box.totalDossiers || 6;
+    const isMonthlyBox = boxCap === 2;
     const pct = box.totalProjects > 0 ? ((box.archivedProjects / box.totalProjects) * 100).toFixed(1) : '0.0';
 
     return (
@@ -1466,14 +1970,28 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 {statusBadge(box.status)}
               </div>
               <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-                {isAr
+                {isMonthlyBox
+                  ? isAr
+                    ? `السعة: دوسيهان (كل دوسيه = شهر كامل) · إجمالي ${box.totalProjects} فرع/إرسالية`
+                    : `2 Monthly Dossiers capacity · ${box.totalProjects} branch shipments`
+                  : isAr
                   ? `السعة: 6 دوسيهات (كل دوسيه = أسبوع تشغيل) · إجمالي ${box.totalProjects} فرع/إرسالية`
                   : `6 Weekly Dossiers capacity · ${box.totalProjects} branch shipments`}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => openBoxStatusModal(box)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:border-[#E52225] hover:text-[#E52225] rounded-lg transition-colors"
+              >
+                <Edit2 className="w-3.5 h-3.5 text-[#E52225]" />
+                <span>{isAr ? 'تحديد حالة البوكس' : 'Change Box Status'}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onNavigate('projects', `box:${box.boxCode}`)}
@@ -1512,20 +2030,61 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             <span className="text-[10px] text-slate-400">{isAr ? 'بانتظار الأرشفة' : 'awaiting archive'}</span>
           </div>
           <div>
-            <span className="text-[11px] text-slate-500">{isAr ? 'الدوسيهات (الأسابيع)' : 'Dossiers (Weeks)'}</span>
-            <div className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">{boxDossiers.length} / 6</div>
+            <span className="text-[11px] text-slate-500">
+              {isMonthlyBox ? (isAr ? 'الدوسيهات (الشهور)' : 'Dossiers (Months)') : isAr ? 'الدوسيهات (الأسابيع)' : 'Dossiers (Weeks)'}
+            </span>
+            <div className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">
+              {boxDossiers.length} / {boxCap}
+            </div>
             <span className="text-[10px] text-slate-400">
               {box.completedDossiers} {isAr ? 'دوسيه مكتمل' : 'completed'}
             </span>
           </div>
         </div>
 
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white mb-3">
-            {isAr ? 'الدوسيهات الستة داخل البوكس (كل دوسيه = أسبوع)' : 'The 6 Weekly Dossiers of this Box'}
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3, 4, 5, 6].map(num => {
+        {renderBoxStatusModal()}
+        {renderDossierStatusModal()}
+
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              {isMonthlyBox
+                ? isAr
+                  ? 'الدوسيهات الشهرية داخل البوكس (كل دوسيه = شهر)'
+                  : 'The 2 Monthly Dossiers of this Box'
+                : isAr
+                ? 'الدوسيهات الستة داخل البوكس (كل دوسيه = أسبوع)'
+                : 'The 6 Weekly Dossiers of this Box'}
+            </h2>
+            {canEdit && boxDossiers.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const allChecked = boxDossiers.every(d => selectedDossierIds.includes(d.id));
+                  if (allChecked) {
+                    const boxDossierSet = new Set(boxDossiers.map(d => d.id));
+                    setSelectedDossierIds(prev => prev.filter(id => !boxDossierSet.has(id)));
+                  } else {
+                    setSelectedDossierIds(prev => Array.from(new Set([...prev, ...boxDossiers.map(d => d.id)])));
+                  }
+                }}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-700 dark:text-neutral-200 hover:border-[#E52225] hover:text-[#E52225] transition-colors"
+              >
+                {boxDossiers.every(d => selectedDossierIds.includes(d.id))
+                  ? isAr
+                    ? 'إلغاء تحديد دوسيهات البوكس'
+                    : 'Deselect All Dossiers'
+                  : isAr
+                  ? `تحديد كل دوسيهات البوكس (${boxDossiers.length})`
+                  : `Select All Dossiers (${boxDossiers.length})`}
+              </button>
+            )}
+          </div>
+
+          {renderDossierBulkBar(boxDossiers)}
+
+          <div className={`grid grid-cols-1 ${isMonthlyBox ? 'md:grid-cols-2' : 'md:grid-cols-2 lg:grid-cols-3'} gap-4`}>
+            {Array.from({ length: boxCap }, (_, i) => i + 1).map(num => {
               const dossier = boxDossiers.find(d => d.dossierNumber === num);
               if (!dossier) {
                 return (
@@ -1536,11 +2095,17 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                     <div className="font-mono font-bold text-slate-500 mb-1">
                       {box.boxCode}-{num}
                     </div>
-                    <div>{isAr ? `دوسيه ${num} / 6 — فارغ (بانتظار أسبوع جديد)` : `Dossier ${num} / 6 — Empty`}</div>
+                    <div>
+                      {isAr
+                        ? `دوسيه ${num} / ${boxCap} — فارغ (بانتظار بيانات)`
+                        : `Dossier ${num} / ${boxCap} — Empty`}
+                    </div>
                   </div>
                 );
               }
               const dPct = dossier.totalProjects > 0 ? Math.round((dossier.archivedCount / dossier.totalProjects) * 100) : 0;
+              const monthNumLabel = dossier.weekStart ? Number(dossier.weekStart.slice(5, 7)) : null;
+              const isSelected = selectedDossierIds.includes(dossier.id);
               return (
                 <div
                   key={dossier.id}
@@ -1548,24 +2113,58 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                     onSelectDossier(dossier.id);
                     onNavigate('dossier-detail', dossier.id);
                   }}
-                  className="p-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl hover:border-[#E52225]/60 hover:shadow-xs cursor-pointer transition-all flex flex-col justify-between group"
+                  className={`p-4 border rounded-xl hover:shadow-xs cursor-pointer transition-all flex flex-col justify-between group ${
+                    isSelected
+                      ? 'bg-red-50/50 dark:bg-red-950/20 border-[#E52225] ring-1 ring-[#E52225]/30'
+                      : 'bg-white dark:bg-[#111111] border-slate-200 dark:border-neutral-800 hover:border-[#E52225]/60'
+                  }`}
                 >
                   <div>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/40 flex items-center justify-center font-bold text-[#E52225] dark:text-red-400 text-sm">
+                        {canEdit && (
+                          <div onClick={e => e.stopPropagation()} className="pt-0.5">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectDossier(dossier.id)}
+                              title={isAr ? 'تحديد الدوسيه' : 'Select dossier'}
+                              className="rounded border-slate-300 text-[#E52225] focus:ring-[#E52225] cursor-pointer"
+                            />
+                          </div>
+                        )}
+                        <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/40 flex items-center justify-center font-bold text-[#E52225] dark:text-red-400 text-sm shrink-0">
                           {dossier.dossierNumber}
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-[#E52225] transition-colors">
-                            {dossier.id} · {isAr ? `الأسبوع ${dossier.dossierNumber}` : `Week ${dossier.dossierNumber}`}
+                            {dossier.id} ·{' '}
+                            {isMonthlyBox
+                              ? isAr
+                                ? `شهر ${monthNumLabel ?? dossier.dossierNumber}`
+                                : `Month ${monthNumLabel ?? dossier.dossierNumber}`
+                              : isAr
+                              ? `الأسبوع ${dossier.dossierNumber}`
+                              : `Week ${dossier.dossierNumber}`}
                           </h3>
                           <div className="text-[11px] text-slate-500 tabular-nums">
                             {fmtDate(dossier.weekStart)} → {fmtDate(dossier.weekEnd)}
                           </div>
                         </div>
                       </div>
-                      {statusBadge(dossier.status)}
+                      <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                        {statusBadge(dossier.status)}
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => openDossierStatusModal(dossier)}
+                            title={isAr ? 'تحديد حالة الدوسيه بالكامل' : 'Change Dossier Status'}
+                            className="p-1 text-slate-400 hover:text-[#E52225] rounded hover:bg-red-50 dark:hover:bg-neutral-900"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800 text-center">
@@ -1636,6 +2235,9 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       return true;
     });
 
+    const allFilteredDossiersSelected =
+      filteredDossiers.length > 0 && filteredDossiers.every(d => selectedDossierIds.includes(d.id));
+
     return (
       <div className="space-y-6">
         {activeTab === 'archive' && renderArchiveSubTabs()}
@@ -1643,25 +2245,45 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
           <div>
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <FolderArchive className="w-6 h-6 text-[#E52225]" />
-              <span>{isAr ? 'الدوسيهات الأسبوعية (Dossiers)' : 'Weekly Dossiers'}</span>
+              <span>{isAr ? 'الدوسيهات' : 'Dossiers'}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'كل دوسيه يمثل أسبوع تشغيل (الأحد → الخميس) داخل البوكسات.'
-                : 'Each dossier corresponds to one operational week (Sun → Thu) inside boxes.'}
-            </p>
           </div>
+
+          {canEdit && filteredDossiers.length > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedDossierIds(allFilteredDossiersSelected ? [] : filteredDossiers.map(d => d.id))
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:border-[#E52225] hover:text-[#E52225] rounded-lg transition-colors shrink-0"
+            >
+              <CheckSquare className="w-3.5 h-3.5 text-[#E52225]" />
+              <span>
+                {allFilteredDossiersSelected
+                  ? isAr
+                    ? 'إلغاء تحديد الكل'
+                    : 'Deselect All'
+                  : isAr
+                  ? `تحديد كل الدوسيهات (${filteredDossiers.length})`
+                  : `Select All (${filteredDossiers.length})`}
+              </span>
+            </button>
+          )}
         </div>
 
         {renderDateStatusFilterCard('dossiers', filteredDossiers.length)}
 
+        {renderDossierBulkBar(filteredDossiers)}
+        {renderDossierStatusModal()}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredDossiers.map(dossier => {
             const pct = dossier.totalProjects > 0 ? Math.round((dossier.archivedCount / dossier.totalProjects) * 100) : 0;
+            const isSelected = selectedDossierIds.includes(dossier.id);
             return (
               <div
                 key={dossier.id}
@@ -1669,12 +2291,27 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                   onSelectDossier(dossier.id);
                   onNavigate('dossier-detail', dossier.id);
                 }}
-                className="p-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl hover:border-[#E52225]/60 hover:shadow-xs cursor-pointer transition-all flex flex-col justify-between group"
+                className={`p-4 border rounded-xl hover:shadow-xs cursor-pointer transition-all flex flex-col justify-between group ${
+                  isSelected
+                    ? 'bg-red-50/50 dark:bg-red-950/20 border-[#E52225] ring-1 ring-[#E52225]/30'
+                    : 'bg-white dark:bg-[#111111] border-slate-200 dark:border-neutral-800 hover:border-[#E52225]/60'
+                }`}
               >
                 <div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/40 flex items-center justify-center font-bold text-[#E52225] dark:text-red-400 text-sm">
+                      {canEdit && (
+                        <div onClick={e => e.stopPropagation()} className="pt-0.5">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectDossier(dossier.id)}
+                            title={isAr ? 'تحديد الدوسيه' : 'Select dossier'}
+                            className="rounded border-slate-300 text-[#E52225] focus:ring-[#E52225] cursor-pointer"
+                          />
+                        </div>
+                      )}
+                      <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-950/40 flex items-center justify-center font-bold text-[#E52225] dark:text-red-400 text-sm shrink-0">
                         {dossier.dossierNumber}
                       </div>
                       <div>
@@ -1686,7 +2323,19 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                         </div>
                       </div>
                     </div>
-                    {statusBadge(dossier.status)}
+                    <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                      {statusBadge(dossier.status)}
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => openDossierStatusModal(dossier)}
+                          title={isAr ? 'تحديد حالة الدوسيه بالكامل' : 'Change Dossier Status'}
+                          className="p-1 text-slate-400 hover:text-[#E52225] rounded hover:bg-red-50 dark:hover:bg-neutral-900"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-100 dark:border-neutral-800 text-center">
@@ -1791,14 +2440,26 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onNavigate('labels', `${dossier.boxId}:${dossier.dossierNumber}`)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg transition-colors"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>{isAr ? 'طباعة ليبل الدوسيه' : 'Print Dossier Label'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => openDossierStatusModal(dossier)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:border-[#E52225] hover:text-[#E52225] rounded-lg transition-colors"
+              >
+                <Edit2 className="w-3.5 h-3.5 text-[#E52225]" />
+                <span>{isAr ? 'تحديد حالة الدوسيه' : 'Change Dossier Status'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('labels', `${dossier.boxId}:${dossier.dossierNumber}`)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg transition-colors"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>{isAr ? 'طباعة ليبل الدوسيه' : 'Print Dossier Label'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white dark:bg-[#111111] p-4 rounded-xl border border-slate-200 dark:border-neutral-800">
@@ -1889,13 +2550,14 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       />
                     </th>
                   )}
-                  <th className="px-3 py-3 w-12">#</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'اسم الفرع' : 'Branch Name'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'رقم الإرسالية' : 'Shipment No.'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'تاريخ بدء التشغيل' : 'Start Date'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'تفاصيل إضافية' : 'Details'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'الحالة' : 'Status'}</th>
-                  <th className="px-4 py-3 text-center">{isAr ? 'الإجراءات' : 'Actions'}</th>
+                  <th className="px-3 py-3 w-10 text-center">#</th>
+                  <th className="px-3 py-3 text-start min-w-[165px]">{isAr ? 'اسم الفرع' : 'Branch Name'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'رقم الإرسالية' : 'Shipment No.'}</th>
+                  <th className="px-3 py-3 text-start min-w-[120px]">{isAr ? 'المنطقة / الجناح' : 'Region / Wing'}</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">{isAr ? 'عدد المناديل' : 'Folders'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'تاريخ التشغيل' : 'Operational Date'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'الحالة' : 'Status'}</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">{isAr ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-neutral-800">
@@ -1906,7 +2568,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                     className="hover:bg-slate-50/70 dark:hover:bg-neutral-900/40 cursor-pointer transition-colors"
                   >
                     {canEdit && (
-                      <td className="px-3 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      <td className="px-3 py-2.5 text-center" onClick={e => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedJobIds.includes(p.jobId)}
@@ -1915,24 +2577,45 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                         />
                       </td>
                     )}
-                    <td className="px-3 py-3 text-slate-400 tabular-nums">{idx + 1}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-center text-slate-400 tabular-nums">{idx + 1}</td>
+                    <td className="px-3 py-2.5">
                       <div className="font-bold text-slate-900 dark:text-white">{p.branchName || '—'}</div>
                       {p.branchCode && <div className="text-[10px] text-slate-400 font-mono">{p.branchCode}</div>}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 whitespace-nowrap">
                       <span className="font-mono font-bold px-2 py-0.5 rounded bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300">
                         {p.shipmentNo ?? '—'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 tabular-nums font-medium text-slate-700 dark:text-neutral-300">
-                      {fmtDate(p.startDate)}
+                    <td className="px-3 py-2.5">
+                      {p.region ? (
+                        <div className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-neutral-200">
+                          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span>{p.region}</span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                      {p.wing && (
+                        <div className="text-[10px] text-slate-400 mt-0.5">{p.wing}</div>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-[11px] text-slate-500">
-                      {[p.region, p.folderCount ? `${p.folderCount} ${isAr ? 'منديل' : 'folders'}` : ''].filter(Boolean).join(' · ') || '—'}
+                    <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold tabular-nums bg-slate-100 dark:bg-neutral-900 text-slate-800 dark:text-neutral-200">
+                        {p.folderCount ?? 0}
+                        <span className="text-[10px] font-normal text-slate-500">{isAr ? 'منديل' : 'f'}</span>
+                      </span>
                     </td>
-                    <td className="px-4 py-3">{statusBadge(p.status)}</td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-3 py-2.5 tabular-nums whitespace-nowrap">
+                      <div className="font-medium text-slate-700 dark:text-neutral-300">{fmtDate(p.startDate)}</div>
+                      {p.endDate && (
+                        <div className="text-[10px] text-slate-400">
+                          {isAr ? 'إلى' : 'to'} {fmtDate(p.endDate)}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">{statusBadge(p.status)}</td>
+                    <td className="px-3 py-2.5 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-1">
                         <button
                           type="button"
@@ -1962,7 +2645,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 ))}
                 {dossierBranches.length === 0 && (
                   <tr>
-                    <td colSpan={canEdit ? 8 : 7} className="py-10 text-center text-slate-400">
+                    <td colSpan={canEdit ? 9 : 8} className="py-10 text-center text-slate-400">
                       {isAr ? 'لا توجد فروع في هذا الدوسيه.' : 'No branches in this dossier.'}
                     </td>
                   </tr>
@@ -1972,6 +2655,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
           </div>
         </div>
 
+        {renderDossierStatusModal()}
         {renderBranchModals()}
       </div>
     );
@@ -1992,10 +2676,13 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
           fmtDate(p.startDate).includes(q) ||
           p.boxId.toLowerCase().includes(q) ||
           `${p.boxId}-${p.dossierNumber}`.toLowerCase().includes(q) ||
-          (p.region || '').toLowerCase().includes(q);
+          (p.region || '').toLowerCase().includes(q) ||
+          (p.wing || '').toLowerCase().includes(q) ||
+          String(p.folderCount ?? '').includes(q);
         if (!matchSearch) return false;
         if (boxFilter !== 'all' && p.boxId !== boxFilter) return false;
         if (dossierFilter !== 'all' && `${p.boxId}-${p.dossierNumber}` !== dossierFilter) return false;
+        if (regionFilter !== 'all' && (p.region || '').trim() !== regionFilter) return false;
         if (statusFilter !== 'all' && p.status !== statusFilter) return false;
         if (!matchesDateRange(p.startDate || p.weekStart)) return false;
         return true;
@@ -2007,6 +2694,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
           (a.shipmentNo ?? 0) - (b.shipmentNo ?? 0)
       );
 
+    const totalFilteredFolders = filteredBranches.reduce((sum, p) => sum + (p.folderCount || 0), 0);
     const totalPages = Math.ceil(filteredBranches.length / pageSize) || 1;
     const safePage = Math.min(currentPage, totalPages);
     const paginated = filteredBranches.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -2019,23 +2707,22 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
           <div>
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <CheckSquare className="w-6 h-6 text-[#E52225]" />
-              <span>{isAr ? 'الفروع والإرساليات (Branches)' : 'Branches & Shipments'}</span>
+              <span>{isAr ? 'الفروع والإرساليات' : 'Branches & Shipments'}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'اسم الفرع · رقم الإرسالية (المميز للفرع عند التكرار) · تاريخ بدء التشغيل · مع إمكانية التحديد وتغيير الحالات وعرض تفاصيل كل فرع.'
-                : 'Branch name, unique shipment no., operational start date — select and update branch statuses or inspect full branch details.'}
-            </p>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-500">
-            <span>
-              {isAr ? 'إجمالي الفروع:' : 'Total:'}{' '}
-              <strong className="text-[#E52225] dark:text-red-400 tabular-nums">{filteredBranches.length}</strong>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+            <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+              {isAr ? 'إجمالي الفروع:' : 'Branches:'}{' '}
+              <strong className="text-[#E52225] dark:text-red-400 tabular-nums">{filteredBranches.length.toLocaleString()}</strong>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800">
+              {isAr ? 'إجمالي المناديل:' : 'Total Folders:'}{' '}
+              <strong className="text-slate-900 dark:text-white tabular-nums">{totalFilteredFolders.toLocaleString()}</strong>
             </span>
           </div>
         </div>
@@ -2101,7 +2788,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
           </div>
         )}
 
-        {/* Branches Table */}
+        {/* Branches Table — cleanly balanced columns for Name, Shipment, Region/Wing, Folders (المناديل), Dates, Dossier, Status */}
         <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-start">
@@ -2124,14 +2811,15 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       />
                     </th>
                   )}
-                  <th className="px-3 py-3 w-12">#</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'اسم الفرع' : 'Branch Name'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'رقم الإرسالية' : 'Shipment No.'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'تاريخ بدء التشغيل' : 'Start Date'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'البوكس / الدوسيه (الأسبوع)' : 'Box / Weekly Dossier'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'المنطقة / المناديل' : 'Region / Folders'}</th>
-                  <th className="px-4 py-3 text-start">{isAr ? 'الحالة' : 'Status'}</th>
-                  <th className="px-4 py-3 text-center">{isAr ? 'الإجراءات' : 'Actions'}</th>
+                  <th className="px-2.5 py-3 w-10 text-center">#</th>
+                  <th className="px-3 py-3 text-start min-w-[175px]">{isAr ? 'اسم الفرع' : 'Branch Name'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'رقم الإرسالية' : 'Shipment No.'}</th>
+                  <th className="px-3 py-3 text-start min-w-[125px]">{isAr ? 'المنطقة / الجناح' : 'Region / Wing'}</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">{isAr ? 'عدد المناديل' : 'Folders'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'تاريخ التشغيل' : 'Operational Date'}</th>
+                  <th className="px-3 py-3 text-start min-w-[145px]">{isAr ? 'البوكس / الدوسيه' : 'Box / Dossier'}</th>
+                  <th className="px-3 py-3 text-start whitespace-nowrap">{isAr ? 'الحالة' : 'Status'}</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">{isAr ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-neutral-800">
@@ -2145,7 +2833,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       className="hover:bg-slate-50/70 dark:hover:bg-neutral-900/40 cursor-pointer transition-colors"
                     >
                       {canEdit && (
-                        <td className="px-3 py-3 text-center" onClick={e => e.stopPropagation()}>
+                        <td className="px-3 py-2.5 text-center" onClick={e => e.stopPropagation()}>
                           <input
                             type="checkbox"
                             checked={selectedJobIds.includes(p.jobId)}
@@ -2154,8 +2842,10 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                           />
                         </td>
                       )}
-                      <td className="px-3 py-3 text-slate-400 tabular-nums">{(safePage - 1) * pageSize + idx + 1}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-2.5 py-2.5 text-center text-slate-400 tabular-nums">
+                        {(safePage - 1) * pageSize + idx + 1}
+                      </td>
+                      <td className="px-3 py-2.5">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-slate-900 dark:text-white">{p.branchName || '—'}</span>
                           {repeatCount > 1 && (
@@ -2167,17 +2857,45 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                             </span>
                           )}
                         </div>
-                        {p.branchCode && <div className="text-[10px] text-slate-400 font-mono">{p.branchCode}</div>}
+                        {p.branchCode && (
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                            {isAr ? 'كود:' : 'Code:'} {p.branchCode}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-2.5 whitespace-nowrap">
                         <span className="font-mono font-extrabold px-2 py-0.5 rounded bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300">
                           {p.shipmentNo ?? '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 tabular-nums font-medium text-slate-700 dark:text-neutral-300">
-                        {fmtDate(p.startDate)}
+                      <td className="px-3 py-2.5">
+                        {p.region ? (
+                          <div className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-neutral-200">
+                            <MapPin className="w-3 h-3 text-[#E52225]/70 shrink-0" />
+                            <span>{p.region}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                        {p.wing && (
+                          <div className="text-[10px] text-slate-500 dark:text-neutral-400 mt-0.5">{p.wing}</div>
+                        )}
                       </td>
-                      <td className="px-4 py-3 text-[11px]" onClick={e => e.stopPropagation()}>
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold tabular-nums bg-slate-100 dark:bg-neutral-900 text-slate-800 dark:text-neutral-200">
+                          {p.folderCount ?? 0}
+                          <span className="text-[10px] font-normal text-slate-500">{isAr ? 'منديل' : 'f'}</span>
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 tabular-nums whitespace-nowrap">
+                        <div className="font-medium text-slate-700 dark:text-neutral-300">{fmtDate(p.startDate)}</div>
+                        {p.endDate && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            {isAr ? 'إلى' : 'to'} {fmtDate(p.endDate)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-[11px] whitespace-nowrap" onClick={e => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => {
@@ -2195,11 +2913,8 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                           </div>
                         </button>
                       </td>
-                      <td className="px-4 py-3 text-[11px] text-slate-500">
-                        {[p.region, p.folderCount ? `${p.folderCount} ${isAr ? 'منديل' : 'folders'}` : ''].filter(Boolean).join(' · ') || '—'}
-                      </td>
-                      <td className="px-4 py-3">{statusBadge(p.status)}</td>
-                      <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      <td className="px-3 py-2.5 whitespace-nowrap">{statusBadge(p.status)}</td>
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -2230,7 +2945,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 })}
                 {paginated.length === 0 && (
                   <tr>
-                    <td colSpan={canEdit ? 9 : 8} className="py-12 text-center text-slate-400">
+                    <td colSpan={canEdit ? 10 : 9} className="py-12 text-center text-slate-400">
                       {isAr ? 'لا توجد فروع مطابقة حالياً.' : 'No matching branches found.'}
                     </td>
                   </tr>
@@ -2303,31 +3018,457 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
 
   /* -------------------- 7. REPORTS VIEW -------------------- */
   if (activeTab === 'reports') {
+    const reportQuery = reportSearch.trim().toLowerCase();
+
+    const dossiersByBox = new Map<string, Dossier[]>();
+    for (const d of sortedDossiers) {
+      const list = dossiersByBox.get(d.boxId) || [];
+      list.push(d);
+      dossiersByBox.set(d.boxId, list);
+    }
+
+    const projectsByBox = new Map<string, Project[]>();
+    const dossierFoldersMap = new Map<string, number>();
+    for (const p of projects) {
+      const list = projectsByBox.get(p.boxId) || [];
+      list.push(p);
+      projectsByBox.set(p.boxId, list);
+      const dKey = `${p.boxId}-${p.dossierNumber}`;
+      dossierFoldersMap.set(dKey, (dossierFoldersMap.get(dKey) || 0) + (p.folderCount ?? 0));
+    }
+
+    const boxMetaMap = new Map<
+      string,
+      {
+        periodLabel: string;
+        foldersCount: number;
+        isMonthly: boolean;
+        completedDossiers: number;
+        filledDossiers: number;
+        totalDossiers: number;
+      }
+    >();
+
+    const allDistributionItems: CommentsBoxDistributionItem[] = sortedBoxes.map(b => {
+      const boxDossiers = dossiersByBox.get(b.boxCode) || [];
+      const boxProjects = projectsByBox.get(b.boxCode) || [];
+      const totalDossiers = b.totalDossiers || 6;
+      const isMonthly = totalDossiers === 2;
+      const foldersCount = boxProjects.reduce((sum, p) => sum + (p.folderCount ?? 0), 0);
+
+      const startDates = [
+        ...boxDossiers.map(d => d.weekStart).filter(Boolean),
+        ...boxProjects.map(p => p.startDate).filter(Boolean),
+      ].sort();
+      const endDates = [
+        ...boxDossiers.map(d => d.weekEnd || d.weekStart).filter(Boolean),
+        ...boxProjects.map(p => p.startDate).filter(Boolean),
+      ].sort();
+
+      const minStart = startDates[0];
+      const maxEnd = endDates[endDates.length - 1];
+      const periodLabel =
+        minStart && maxEnd && minStart !== maxEnd
+          ? `${fmtDate(minStart)} → ${fmtDate(maxEnd)}`
+          : minStart
+          ? fmtDate(minStart)
+          : '—';
+
+      const completedDossiers = boxDossiers.filter(d => d.status === 'Archived').length;
+      boxMetaMap.set(b.boxCode, {
+        periodLabel,
+        foldersCount,
+        isMonthly,
+        completedDossiers,
+        filledDossiers: boxDossiers.length,
+        totalDossiers,
+      });
+
+      return {
+        boxCode: b.boxCode,
+        totalDossiers,
+        isMonthly,
+        periodLabel,
+        totalProjects: b.totalProjects,
+        archivedProjects: b.archivedProjects,
+        missingProjects: b.missingProjects,
+        pendingProjects: b.pendingProjects,
+        foldersCount,
+        status: b.status,
+        dossiers: boxDossiers.map(d => {
+          const dFolders = dossierFoldersMap.get(d.id) ?? dossierFoldersMap.get(`${d.boxId}-${d.dossierNumber}`) ?? 0;
+          const dPeriod =
+            d.weekStart && d.weekEnd && d.weekStart !== d.weekEnd
+              ? `${fmtDate(d.weekStart)} → ${fmtDate(d.weekEnd)}`
+              : fmtDate(d.weekStart || d.weekEnd);
+          return {
+            id: d.id,
+            dossierNumber: d.dossierNumber,
+            periodLabel: dPeriod,
+            totalProjects: d.totalProjects,
+            archivedCount: d.archivedCount,
+            missingCount: d.missingCount,
+            pendingCount: d.pendingCount,
+            foldersCount: dFolders,
+            status: d.status,
+          };
+        }),
+      };
+    });
+
+    const filteredDistributionItems = allDistributionItems.filter(item => {
+      if (reportBoxFilter !== 'all' && item.boxCode !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      if (
+        item.boxCode.toLowerCase().includes(reportQuery) ||
+        item.periodLabel.toLowerCase().includes(reportQuery) ||
+        item.status.toLowerCase().includes(reportQuery)
+      ) {
+        return true;
+      }
+      if (
+        item.dossiers.some(
+          d =>
+            d.id.toLowerCase().includes(reportQuery) ||
+            d.periodLabel.toLowerCase().includes(reportQuery) ||
+            d.status.toLowerCase().includes(reportQuery)
+        )
+      ) {
+        return true;
+      }
+      const boxProjects = projectsByBox.get(item.boxCode) || [];
+      return boxProjects.some(
+        p =>
+          (p.branchName || '').toLowerCase().includes(reportQuery) ||
+          (p.branchCode || '').toLowerCase().includes(reportQuery) ||
+          (p.region || '').toLowerCase().includes(reportQuery) ||
+          String(p.shipmentNo || '').toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const reportProjects = projects.filter(p => {
+      if (reportBoxFilter !== 'all' && p.boxId !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      return (
+        (p.branchName || '').toLowerCase().includes(reportQuery) ||
+        (p.branchCode || '').toLowerCase().includes(reportQuery) ||
+        (p.region || '').toLowerCase().includes(reportQuery) ||
+        String(p.shipmentNo || '').toLowerCase().includes(reportQuery) ||
+        p.boxId.toLowerCase().includes(reportQuery) ||
+        `${p.boxId}-${p.dossierNumber}`.toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const reportDossiers = sortedDossiers.filter(d => {
+      if (reportBoxFilter !== 'all' && d.boxId !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      return (
+        d.id.toLowerCase().includes(reportQuery) ||
+        d.boxId.toLowerCase().includes(reportQuery) ||
+        (d.weekStart || '').toLowerCase().includes(reportQuery) ||
+        (d.weekEnd || '').toLowerCase().includes(reportQuery) ||
+        d.status.toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const reportBoxes = sortedBoxes.filter(b => {
+      if (reportBoxFilter !== 'all' && b.boxCode !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      const meta = boxMetaMap.get(b.boxCode);
+      return (
+        b.boxCode.toLowerCase().includes(reportQuery) ||
+        b.status.toLowerCase().includes(reportQuery) ||
+        (meta?.periodLabel || '').toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const completedBoxes = reportBoxes.filter(b => b.status === 'Archived');
+    const inprogressBoxes = reportBoxes.filter(b => b.status !== 'Archived');
+
+    const distDossiersCount = filteredDistributionItems.reduce((sum, b) => sum + b.dossiers.length, 0);
+    const distBranchesCount = filteredDistributionItems.reduce((sum, b) => sum + b.totalProjects, 0);
+    const distArchivedCount = filteredDistributionItems.reduce((sum, b) => sum + b.archivedProjects, 0);
+    const distFoldersCount = filteredDistributionItems.reduce((sum, b) => sum + b.foldersCount, 0);
+    const reportArchivedCount = reportProjects.filter(p => p.status === 'Archived').length;
+    const reportMissingCount = reportProjects.filter(p => p.status === 'Missing').length;
+    const reportPendingCount = reportProjects.filter(p => p.status === 'Pending').length;
+    const reportTotalFolders = reportProjects.reduce((sum, p) => sum + (p.folderCount ?? 0), 0);
+    const reportRegionsCount = new Set(reportProjects.map(p => (p.region || '').trim()).filter(Boolean)).size;
+    const reportArchivedPct =
+      reportProjects.length > 0 ? ((reportArchivedCount / reportProjects.length) * 100).toFixed(1) : '0.0';
+
+    const archiveSummaryRows: { metric: string; value: string | number; notes: string }[] = [
+      {
+        metric: isAr ? 'إجمالي البوكسات' : 'Total Boxes',
+        value: reportBoxes.length,
+        notes: isAr
+          ? `شهري: ${reportBoxes.filter(b => (b.totalDossiers || 6) === 2).length} · أسبوعي: ${reportBoxes.filter(b => (b.totalDossiers || 6) !== 2).length}`
+          : `Monthly: ${reportBoxes.filter(b => (b.totalDossiers || 6) === 2).length} · Weekly: ${reportBoxes.filter(b => (b.totalDossiers || 6) !== 2).length}`,
+      },
+      {
+        metric: isAr ? 'البوكسات المكتملة' : 'Archived Boxes',
+        value: completedBoxes.length,
+        notes: isAr ? 'بوكسات مكتملة ومغلقة بالكامل' : '100% completed boxes',
+      },
+      {
+        metric: isAr ? 'البوكسات الجارية' : 'In-Progress Boxes',
+        value: inprogressBoxes.length,
+        notes: isAr ? 'قيد الاستلام أو الاستكمال' : 'Active in-progress boxes',
+      },
+      {
+        metric: isAr ? 'إجمالي الدوسيهات' : 'Total Dossiers',
+        value: reportDossiers.length,
+        notes: isAr
+          ? `مكتمل: ${reportDossiers.filter(d => d.status === 'Archived').length} · جاري: ${reportDossiers.filter(d => d.status !== 'Archived').length}`
+          : `Archived: ${reportDossiers.filter(d => d.status === 'Archived').length} · Active: ${reportDossiers.filter(d => d.status !== 'Archived').length}`,
+      },
+      {
+        metric: isAr ? 'إجمالي الفروع والإرساليات' : 'Total Branches & Shipments',
+        value: reportProjects.length,
+        notes: isAr ? 'إجمالي السجلات المدرجة ضمن النطاق' : 'Total branch shipment records',
+      },
+      {
+        metric: isAr ? 'الفروع المؤرشفة' : 'Archived Branches',
+        value: `${reportArchivedCount} (${reportArchivedPct}%)`,
+        notes: isAr ? 'تم استلامها وأرشفتها فعلياً' : 'Physically archived',
+      },
+      {
+        metric: isAr ? 'الفروع المفقودة' : 'Missing Branches',
+        value: reportMissingCount,
+        notes: isAr ? 'سجلات مسجلة كمفقودة' : 'Marked as missing',
+      },
+      {
+        metric: isAr ? 'الفروع قيد الانتظار' : 'Pending Branches',
+        value: reportPendingCount,
+        notes: isAr ? 'بانتظار الاستلام الفعلي' : 'Awaiting physical delivery',
+      },
+      {
+        metric: isAr ? 'إجمالي المناديل / المجلدات' : 'Total Folders',
+        value: reportTotalFolders,
+        notes: isAr ? 'مجموع خانات المناديل للفروع' : 'Sum of branch folder counts',
+      },
+      {
+        metric: isAr ? 'المناطق / الأجنحة المغطاة' : 'Covered Regions',
+        value: reportRegionsCount,
+        notes: isAr ? 'عدد المناطق الفريدة في النطاق' : 'Distinct branch regions',
+      },
+      {
+        metric: isAr ? 'عمليات الرفع المسجلة' : 'Upload Batches',
+        value: uploadHistory.length,
+        notes: isAr ? 'ملفات خطط التشغيل المرفوعة' : 'Imported plan workbooks',
+      },
+    ];
+
+    const hasExportableData =
+      selectedReportTab === 'distribution'
+        ? filteredDistributionItems.length > 0
+        : selectedReportTab === 'archived-boxes'
+        ? completedBoxes.length > 0
+        : selectedReportTab === 'inprogress-boxes'
+        ? inprogressBoxes.length > 0
+        : selectedReportTab === 'box-details'
+        ? reportBoxes.length > 0
+        : selectedReportTab === 'dossiers'
+        ? reportDossiers.length > 0
+        : selectedReportTab === 'archive-summary'
+        ? sortedBoxes.length > 0 || projects.length > 0
+        : reportProjects.length > 0;
+
     const handleExportExcel = () => {
-      const sheetRows = projects.map((p, idx) => ({
-        '#': idx + 1,
-        'اسم الفرع': p.branchName || '',
-        'كود الفرع': p.branchCode || '',
-        'رقم الإرسالية': p.shipmentNo ?? '',
-        'تاريخ بدء التشغيل': p.startDate || '',
-        'البوكس': p.boxId,
-        'الدوسيه': `${p.boxId}-${p.dossierNumber}`,
-        'الأسبوع': p.weekStart || '',
-        'المنطقة': p.region || '',
-        'عدد المناديل': p.folderCount ?? 0,
-        'الحالة': p.status,
-      }));
+      const dateStr = new Date().toISOString().slice(0, 10);
+      let sheetRows: Record<string, unknown>[] = [];
+      let sheetName = 'Branches Archive';
+      let fileName = `ARMS_Comments_Branches_${dateStr}.xlsx`;
+
+      if (selectedReportTab === 'distribution') {
+        sheetName = 'Boxes Dossiers Dist';
+        fileName = `ARMS_Comments_Distribution_${dateStr}.xlsx`;
+        let rowNum = 0;
+        sheetRows = filteredDistributionItems.flatMap(box => {
+          const slotCount = Math.max(box.dossiers.length, box.isMonthly ? 2 : 6);
+          return Array.from({ length: slotCount }, (_, idx) => {
+            rowNum += 1;
+            const dossier = box.dossiers.find(d => d.dossierNumber === idx + 1) || box.dossiers[idx];
+            return {
+              '#': rowNum,
+              'البوكس': box.boxCode,
+              'نظام التوزيع': box.isMonthly ? 'شهري (2 دوسيه)' : 'أسبوعي (6 دوسيهات)',
+              'فترة البوكس': box.periodLabel,
+              'حالة البوكس': box.status,
+              'رقم الدوسيه': idx + 1,
+              'كود الدوسيه': dossier ? dossier.id : `${box.boxCode}-${idx + 1}`,
+              'فترة الدوسيه': dossier ? dossier.periodLabel : 'فارغ',
+              'إجمالي الفروع': dossier ? dossier.totalProjects : 0,
+              'المؤرشف': dossier ? dossier.archivedCount : 0,
+              'مفقود': dossier ? dossier.missingCount : 0,
+              'قيد الانتظار': dossier ? dossier.pendingCount : 0,
+              'عدد المناديل': dossier ? dossier.foldersCount : 0,
+              'حالة الدوسيه': dossier ? dossier.status : 'Empty',
+            };
+          });
+        });
+      } else if (selectedReportTab === 'archived-boxes') {
+        sheetName = 'Archived Boxes';
+        fileName = `ARMS_Comments_Archived_Boxes_${dateStr}.xlsx`;
+        sheetRows = completedBoxes.map((b, idx) => {
+          const meta = boxMetaMap.get(b.boxCode);
+          return {
+            '#': idx + 1,
+            'البوكس': b.boxCode,
+            'النظام': meta?.isMonthly ? 'شهري (2)' : 'أسبوعي (6)',
+            'الفترة': meta?.periodLabel || '—',
+            'الدوسيهات': `${meta?.filledDossiers ?? 0} / ${meta?.totalDossiers ?? 6}`,
+            'إجمالي الفروع': b.totalProjects,
+            'المؤرشف': b.archivedProjects,
+            'عدد المناديل': meta?.foldersCount ?? 0,
+            'الحالة': b.status,
+          };
+        });
+      } else if (selectedReportTab === 'inprogress-boxes') {
+        sheetName = 'Inprogress Boxes';
+        fileName = `ARMS_Comments_Inprogress_Boxes_${dateStr}.xlsx`;
+        sheetRows = inprogressBoxes.map((b, idx) => {
+          const meta = boxMetaMap.get(b.boxCode);
+          const pct = b.totalProjects > 0 ? Math.round((b.archivedProjects / b.totalProjects) * 100) : 0;
+          return {
+            '#': idx + 1,
+            'البوكس': b.boxCode,
+            'النظام': meta?.isMonthly ? 'شهري (2)' : 'أسبوعي (6)',
+            'الفترة': meta?.periodLabel || '—',
+            'الدوسيهات': `${meta?.filledDossiers ?? 0} / ${meta?.totalDossiers ?? 6}`,
+            'إجمالي الفروع': b.totalProjects,
+            'المؤرشف': b.archivedProjects,
+            'مفقود': b.missingProjects,
+            'قيد الانتظار': b.pendingProjects,
+            'نسبة الإنجاز': `${pct}%`,
+            'عدد المناديل': meta?.foldersCount ?? 0,
+            'الحالة': b.status,
+          };
+        });
+      } else if (selectedReportTab === 'dossiers') {
+        sheetName = 'Dossiers Overview';
+        fileName = `ARMS_Comments_Dossiers_${dateStr}.xlsx`;
+        sheetRows = reportDossiers.map((d, idx) => ({
+          '#': idx + 1,
+          'الدوسيه': d.id,
+          'البوكس': d.boxId,
+          'رقم الدوسيه': d.dossierNumber,
+          'بداية الفترة': fmtDate(d.weekStart),
+          'نهاية الفترة': fmtDate(d.weekEnd),
+          'إجمالي الفروع': d.totalProjects,
+          'المؤرشف': d.archivedCount,
+          'مفقود': d.missingCount,
+          'قيد الانتظار': d.pendingCount,
+          'عدد المناديل': dossierFoldersMap.get(d.id) ?? dossierFoldersMap.get(`${d.boxId}-${d.dossierNumber}`) ?? 0,
+          'الحالة': d.status,
+        }));
+      } else if (selectedReportTab === 'box-details') {
+        sheetName = 'Box Dossier Details';
+        fileName = `ARMS_Comments_Box_Details_${dateStr}.xlsx`;
+        sheetRows = reportBoxes.map((b, idx) => {
+          const meta = boxMetaMap.get(b.boxCode);
+          const pct = b.totalProjects > 0 ? Math.round((b.archivedProjects / b.totalProjects) * 100) : 0;
+          return {
+            '#': idx + 1,
+            'البوكس': b.boxCode,
+            'النظام': meta?.isMonthly ? 'شهري (2)' : 'أسبوعي (6)',
+            'فترة البوكس': meta?.periodLabel || '—',
+            'الدوسيهات المفعلة': `${meta?.filledDossiers ?? 0} / ${meta?.totalDossiers ?? 6}`,
+            'الدوسيهات المكتملة': meta?.completedDossiers ?? 0,
+            'إجمالي الفروع': b.totalProjects,
+            'المؤرشف': b.archivedProjects,
+            'مفقود': b.missingProjects,
+            'قيد الانتظار': b.pendingProjects,
+            'عدد المناديل': meta?.foldersCount ?? 0,
+            'نسبة الإنجاز': `${pct}%`,
+            'الحالة': b.status,
+          };
+        });
+      } else if (selectedReportTab === 'archive-summary') {
+        sheetName = 'Archive Summary';
+        fileName = `ARMS_Comments_Archive_Summary_${dateStr}.xlsx`;
+        sheetRows = archiveSummaryRows.map((r, idx) => ({
+          '#': idx + 1,
+          'البند': r.metric,
+          'العدد / القيمة': r.value,
+          'ملاحظات': r.notes,
+        }));
+      } else {
+        sheetRows = reportProjects.map((p, idx) => ({
+          '#': idx + 1,
+          'اسم الفرع': p.branchName || '',
+          'كود الفرع': p.branchCode || '',
+          'رقم الإرسالية': p.shipmentNo ?? '',
+          'تاريخ بدء التشغيل': p.startDate || '',
+          'البوكس': p.boxId,
+          'الدوسيه': `${p.boxId}-${p.dossierNumber}`,
+          'الأسبوع': p.weekStart || '',
+          'المنطقة': p.region || '',
+          'عدد المناديل': p.folderCount ?? 0,
+          'الحالة': p.status,
+        }));
+      }
+
       const ws = XLSX.utils.json_to_sheet(sheetRows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Branches Archive');
-      XLSX.writeFile(wb, `ARMS_Comments_Branches_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      XLSX.writeFile(wb, fileName);
+      showToast(
+        isAr ? `تم تحميل التقرير بصيغة Excel: ${fileName}` : `Excel report downloaded: ${fileName}`,
+        'success'
+      );
     };
 
     const reportTemplates = [
-      { id: 'branches' as const, label: isAr ? '1. سجل الفروع والإرساليات' : '1. Branches & Shipments Log' },
-      { id: 'dossiers' as const, label: isAr ? '2. ملخص الدوسيهات الأسبوعية' : '2. Weekly Dossiers Summary' },
-      { id: 'summary' as const, label: isAr ? '3. ملخص البوكسات' : '3. Boxes Summary' },
+      { id: 'branches' as const, label: isAr ? 'سجل الفروع والإرساليات' : 'Branches & Shipments Log' },
+      { id: 'archived-boxes' as const, label: isAr ? 'تقرير البوكسات المكتملة' : 'Archived Boxes Report' },
+      { id: 'inprogress-boxes' as const, label: isAr ? 'تقرير البوكسات الجارية' : 'Inprogress Boxes Report' },
+      { id: 'dossiers' as const, label: isAr ? 'تقرير الدوسيهات الشامل' : 'Comprehensive Dossiers Report' },
+      { id: 'box-details' as const, label: isAr ? 'تقرير تفاصيل البوكسات والدوسيهات' : 'Box & Dossier Details Report' },
+      { id: 'distribution' as const, label: isAr ? 'توزيعة البوكسات والدوسيهات' : 'Boxes & Dossiers Distribution' },
+      { id: 'archive-summary' as const, label: isAr ? 'الملخص العام للأرشفة' : 'General Archive Summary' },
     ];
+
+    const cleanTitleEn =
+      selectedReportTab === 'distribution'
+        ? 'Boxes & Dossiers Distribution'
+        : selectedReportTab === 'archived-boxes'
+        ? 'Archived Boxes Report'
+        : selectedReportTab === 'inprogress-boxes'
+        ? 'Inprogress Boxes Report'
+        : selectedReportTab === 'dossiers'
+        ? 'Comprehensive Dossiers Report'
+        : selectedReportTab === 'box-details'
+        ? 'Box & Dossier Details Report'
+        : selectedReportTab === 'archive-summary'
+        ? 'General Archive Summary'
+        : 'Branches & Shipments Log';
+
+    const scopeLabel = reportBoxFilter === 'all' ? 'All Boxes' : `Box ${reportBoxFilter}`;
+
+    const totalSummaryDisplay =
+      selectedReportTab === 'distribution'
+        ? `${filteredDistributionItems.length} Boxes · ${distDossiersCount} Dossiers · ${distFoldersCount} Folders`
+        : selectedReportTab === 'archived-boxes'
+        ? `${completedBoxes.length} Boxes · ${completedBoxes.reduce((s, b) => s + b.totalProjects, 0)} Branches`
+        : selectedReportTab === 'inprogress-boxes'
+        ? `${inprogressBoxes.length} Boxes · ${inprogressBoxes.reduce((s, b) => s + b.totalProjects, 0)} Branches`
+        : selectedReportTab === 'dossiers'
+        ? `${reportDossiers.length} Dossiers · ${reportBoxes.length} Boxes`
+        : selectedReportTab === 'box-details'
+        ? `${reportBoxes.length} Boxes · ${reportDossiers.length} Dossiers`
+        : selectedReportTab === 'archive-summary'
+        ? `${reportBoxes.length} Boxes · ${reportProjects.length} Branches · ${reportTotalFolders} Folders`
+        : `${reportProjects.length} Records · ${reportBoxes.length} Boxes`;
+
+    const formattedPrintDate = new Date().toLocaleString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
 
     const handleExportPDF = async () => {
       if (exportingPdf) return;
@@ -2335,84 +3476,193 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       try {
         let columns: CommentsReportColumn[] = [];
         let rows: Record<string, string | number>[] = [];
-        let title = isAr ? 'تقرير أرشفة التعليقات' : 'Comments Archive Report';
+        const title = cleanTitleEn;
+        let summaryItems = [
+          { label: isAr ? 'البوكسات' : 'Boxes', value: String(reportBoxes.length) },
+          { label: isAr ? 'الدوسيهات' : 'Dossiers', value: String(reportDossiers.length) },
+          { label: isAr ? 'الفروع' : 'Branches', value: String(reportProjects.length) },
+          { label: isAr ? 'المؤرشف' : 'Archived', value: `${reportArchivedCount} (${reportArchivedPct}%)` },
+        ];
 
-        if (selectedReportTab === 'branches') {
-          title = isAr ? 'سجل الفروع والإرساليات' : 'Branches & Shipments Log';
-          columns = [
-            { key: 'branchName', label: isAr ? 'اسم الفرع' : 'Branch Name', weight: 1.8 },
-            { key: 'shipmentNo', label: isAr ? 'رقم الإرسالية' : 'Shipment No.', weight: 1.1, align: 'center' },
-            { key: 'startDate', label: isAr ? 'تاريخ بدء التشغيل' : 'Start Date', weight: 1.1, align: 'center' },
-            { key: 'boxDossier', label: isAr ? 'البوكس / الدوسيه' : 'Box / Dossier', weight: 1.0, align: 'center' },
-            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.9, align: 'center' },
+        if (selectedReportTab === 'distribution') {
+          summaryItems = [
+            { label: isAr ? 'البوكسات' : 'Boxes', value: String(filteredDistributionItems.length) },
+            { label: isAr ? 'الدوسيهات' : 'Dossiers', value: String(distDossiersCount) },
+            { label: isAr ? 'الفروع' : 'Branches', value: String(distBranchesCount) },
+            {
+              label: isAr ? 'المناديل / المؤرشف' : 'Folders / Arch',
+              value: `${distFoldersCount} / ${distArchivedCount}`,
+            },
           ];
-          rows = projects.map(p => ({
+        } else if (selectedReportTab === 'archived-boxes') {
+          summaryItems = [
+            { label: isAr ? 'البوكسات المكتملة' : 'Archived Boxes', value: String(completedBoxes.length) },
+            {
+              label: isAr ? 'إجمالي الفروع' : 'Total Branches',
+              value: String(completedBoxes.reduce((s, b) => s + b.totalProjects, 0)),
+            },
+            {
+              label: isAr ? 'المؤرشف' : 'Archived',
+              value: String(completedBoxes.reduce((s, b) => s + b.archivedProjects, 0)),
+            },
+            {
+              label: isAr ? 'إجمالي المناديل' : 'Folders',
+              value: String(completedBoxes.reduce((s, b) => s + (boxMetaMap.get(b.boxCode)?.foldersCount ?? 0), 0)),
+            },
+          ];
+          columns = [
+            { key: 'boxCode', label: isAr ? 'البوكس' : 'Box', weight: 0.75, align: 'center' },
+            { key: 'system', label: isAr ? 'النظام' : 'System', weight: 0.85, align: 'center' },
+            { key: 'period', label: isAr ? 'الفترة' : 'Period', weight: 1.5, align: 'center' },
+            { key: 'dossiers', label: isAr ? 'الدوسيهات' : 'Dossiers', weight: 0.8, align: 'center' },
+            { key: 'archived', label: isAr ? 'المؤرشف' : 'Archived', weight: 0.85, align: 'center' },
+            { key: 'folders', label: isAr ? 'المناديل' : 'Folders', weight: 0.75, align: 'center' },
+            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.85, align: 'center' },
+          ];
+          rows = completedBoxes.map(b => {
+            const meta = boxMetaMap.get(b.boxCode);
+            return {
+              boxCode: b.boxCode,
+              system: meta?.isMonthly ? (isAr ? 'شهري' : 'Monthly') : isAr ? 'أسبوعي' : 'Weekly',
+              period: meta?.periodLabel || '—',
+              dossiers: `${meta?.filledDossiers ?? 0} / ${meta?.totalDossiers ?? 6}`,
+              archived: `${b.archivedProjects} / ${b.totalProjects}`,
+              folders: meta?.foldersCount ?? 0,
+              status: b.status,
+            };
+          });
+        } else if (selectedReportTab === 'inprogress-boxes') {
+          summaryItems = [
+            { label: isAr ? 'البوكسات الجارية' : 'Active Boxes', value: String(inprogressBoxes.length) },
+            {
+              label: isAr ? 'الفروع المؤرشفة' : 'Archived',
+              value: String(inprogressBoxes.reduce((s, b) => s + b.archivedProjects, 0)),
+            },
+            {
+              label: isAr ? 'مفقود' : 'Missing',
+              value: String(inprogressBoxes.reduce((s, b) => s + b.missingProjects, 0)),
+            },
+            {
+              label: isAr ? 'انتظار' : 'Pending',
+              value: String(inprogressBoxes.reduce((s, b) => s + b.pendingProjects, 0)),
+            },
+          ];
+          columns = [
+            { key: 'boxCode', label: isAr ? 'البوكس' : 'Box', weight: 0.75, align: 'center' },
+            { key: 'period', label: isAr ? 'الفترة' : 'Period', weight: 1.45, align: 'center' },
+            { key: 'dossiers', label: isAr ? 'الدوسيهات' : 'Dossiers', weight: 0.75, align: 'center' },
+            { key: 'archived', label: isAr ? 'المؤرشف' : 'Archived', weight: 0.85, align: 'center' },
+            { key: 'missing', label: isAr ? 'مفقود' : 'Missing', weight: 0.65, align: 'center' },
+            { key: 'pending', label: isAr ? 'انتظار' : 'Pending', weight: 0.65, align: 'center' },
+            { key: 'pct', label: isAr ? 'الإنجاز' : 'Rate', weight: 0.65, align: 'center' },
+            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.85, align: 'center' },
+          ];
+          rows = inprogressBoxes.map(b => {
+            const meta = boxMetaMap.get(b.boxCode);
+            const pct = b.totalProjects > 0 ? Math.round((b.archivedProjects / b.totalProjects) * 100) : 0;
+            return {
+              boxCode: b.boxCode,
+              period: meta?.periodLabel || '—',
+              dossiers: `${meta?.filledDossiers ?? 0} / ${meta?.totalDossiers ?? 6}`,
+              archived: `${b.archivedProjects} / ${b.totalProjects}`,
+              missing: b.missingProjects,
+              pending: b.pendingProjects,
+              pct: `${pct}%`,
+              status: b.status,
+            };
+          });
+        } else if (selectedReportTab === 'branches') {
+          columns = [
+            { key: 'branchName', label: isAr ? 'اسم الفرع' : 'Branch Name', weight: 1.6 },
+            { key: 'shipmentNo', label: isAr ? 'الإرسالية' : 'Shipment No.', weight: 0.9, align: 'center' },
+            { key: 'region', label: isAr ? 'المنطقة' : 'Region', weight: 1.0, align: 'center' },
+            { key: 'folderCount', label: isAr ? 'المناديل' : 'Folders', weight: 0.7, align: 'center' },
+            { key: 'startDate', label: isAr ? 'تاريخ التشغيل' : 'Start Date', weight: 1.0, align: 'center' },
+            { key: 'boxDossier', label: isAr ? 'البوكس / الدوسيه' : 'Box / Dossier', weight: 0.9, align: 'center' },
+            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.8, align: 'center' },
+          ];
+          rows = reportProjects.map(p => ({
             branchName: p.branchName || `#${p.jobId}`,
             shipmentNo: p.shipmentNo ?? '—',
+            region: p.region || '—',
+            folderCount: p.folderCount ?? 0,
             startDate: fmtDate(p.startDate),
             boxDossier: `${p.boxId}-${p.dossierNumber}`,
             status: p.status,
           }));
         } else if (selectedReportTab === 'dossiers') {
-          title = isAr ? 'ملخص الدوسيهات الأسبوعية' : 'Weekly Dossiers Summary';
           columns = [
-            { key: 'id', label: isAr ? 'الدوسيه' : 'Dossier', weight: 0.9, align: 'center' },
-            { key: 'week', label: isAr ? 'الأسبوع' : 'Week', weight: 1.7, align: 'center' },
-            { key: 'total', label: isAr ? 'الفروع' : 'Branches', weight: 0.8, align: 'center' },
-            { key: 'archived', label: isAr ? 'المؤرشف' : 'Archived', weight: 0.8, align: 'center' },
-            { key: 'missing', label: isAr ? 'مفقود' : 'Missing', weight: 0.8, align: 'center' },
-            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.9, align: 'center' },
+            { key: 'id', label: isAr ? 'الدوسيه' : 'Dossier', weight: 0.85, align: 'center' },
+            { key: 'week', label: isAr ? 'الفترة' : 'Period', weight: 1.55, align: 'center' },
+            { key: 'total', label: isAr ? 'الفروع' : 'Branches', weight: 0.65, align: 'center' },
+            { key: 'archived', label: isAr ? 'مؤرشف' : 'Arch', weight: 0.65, align: 'center' },
+            { key: 'missing', label: isAr ? 'مفقود' : 'Miss', weight: 0.65, align: 'center' },
+            { key: 'pending', label: isAr ? 'انتظار' : 'Pend', weight: 0.65, align: 'center' },
+            { key: 'folders', label: isAr ? 'المناديل' : 'Folders', weight: 0.7, align: 'center' },
+            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.85, align: 'center' },
           ];
-          rows = sortedDossiers.map(d => ({
+          rows = reportDossiers.map(d => ({
             id: d.id,
             week: `${fmtDate(d.weekStart)} → ${fmtDate(d.weekEnd)}`,
             total: d.totalProjects,
             archived: d.archivedCount,
             missing: d.missingCount,
+            pending: d.pendingCount,
+            folders: dossierFoldersMap.get(d.id) ?? dossierFoldersMap.get(`${d.boxId}-${d.dossierNumber}`) ?? 0,
             status: d.status,
           }));
-        } else {
-          title = isAr ? 'ملخص البوكسات' : 'Boxes Summary';
+        } else if (selectedReportTab === 'box-details') {
           columns = [
-            { key: 'boxCode', label: isAr ? 'البوكس' : 'Box', weight: 0.9, align: 'center' },
-            { key: 'dossiersCount', label: isAr ? 'الدوسيهات' : 'Dossiers', weight: 0.9, align: 'center' },
-            { key: 'total', label: isAr ? 'إجمالي الفروع' : 'Total Branches', weight: 1.0, align: 'center' },
-            { key: 'archived', label: isAr ? 'المؤرشف' : 'Archived', weight: 0.9, align: 'center' },
-            { key: 'missing', label: isAr ? 'مفقود' : 'Missing', weight: 0.8, align: 'center' },
-            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 1.0, align: 'center' },
+            { key: 'boxCode', label: isAr ? 'البوكس' : 'Box', weight: 0.75, align: 'center' },
+            { key: 'system', label: isAr ? 'النظام' : 'System', weight: 0.8, align: 'center' },
+            { key: 'dossiersCount', label: isAr ? 'الدوسيهات' : 'Dossiers', weight: 0.95, align: 'center' },
+            { key: 'total', label: isAr ? 'الفروع' : 'Branches', weight: 0.7, align: 'center' },
+            { key: 'archived', label: isAr ? 'مؤرشف' : 'Arch', weight: 0.7, align: 'center' },
+            { key: 'missing', label: isAr ? 'مفقود' : 'Miss', weight: 0.65, align: 'center' },
+            { key: 'pending', label: isAr ? 'انتظار' : 'Pend', weight: 0.65, align: 'center' },
+            { key: 'folders', label: isAr ? 'المناديل' : 'Folders', weight: 0.7, align: 'center' },
+            { key: 'status', label: isAr ? 'الحالة' : 'Status', weight: 0.85, align: 'center' },
           ];
-          rows = sortedBoxes.map(b => ({
-            boxCode: b.boxCode,
-            dossiersCount: `${sortedDossiers.filter(d => d.boxId === b.boxCode).length} / 6`,
-            total: b.totalProjects,
-            archived: b.archivedProjects,
-            missing: b.missingProjects,
-            status: b.status,
+          rows = reportBoxes.map(b => {
+            const meta = boxMetaMap.get(b.boxCode);
+            return {
+              boxCode: b.boxCode,
+              system: meta?.isMonthly ? (isAr ? 'شهري' : 'Monthly') : isAr ? 'أسبوعي' : 'Weekly',
+              dossiersCount: `${meta?.completedDossiers ?? 0}/${meta?.filledDossiers ?? 0}/${meta?.totalDossiers ?? 6}`,
+              total: b.totalProjects,
+              archived: b.archivedProjects,
+              missing: b.missingProjects,
+              pending: b.pendingProjects,
+              folders: meta?.foldersCount ?? 0,
+              status: b.status,
+            };
+          });
+        } else {
+          // archive-summary
+          columns = [
+            { key: 'metric', label: isAr ? 'البند' : 'Metric', weight: 1.5 },
+            { key: 'value', label: isAr ? 'العدد / القيمة' : 'Count / Value', weight: 1.0, align: 'center' },
+            { key: 'notes', label: isAr ? 'ملاحظات' : 'Notes', weight: 1.8 },
+          ];
+          rows = archiveSummaryRows.map(r => ({
+            metric: r.metric,
+            value: String(r.value),
+            notes: r.notes,
           }));
         }
-
-        const printDate = new Date().toLocaleString(isAr ? 'ar-EG' : 'en-US', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        });
 
         const fileName = await exportCommentsReportToPDF({
           reportId: selectedReportTab,
           reportTitle: title,
+          scopeLabel,
+          totalSummary: totalSummaryDisplay,
           isAr,
           columns,
           rows,
-          summaryItems: [
-            { label: isAr ? 'البوكسات' : 'Boxes', value: String(sortedBoxes.length) },
-            { label: isAr ? 'الدوسيهات' : 'Dossiers', value: String(sortedDossiers.length) },
-            { label: isAr ? 'الفروع' : 'Branches', value: String(projects.length) },
-            { label: isAr ? 'المؤرشف' : 'Archived', value: `${archivedCount} (${archivedPercent}%)` },
-          ],
-          preparedBy: currentUser?.name || (isAr ? 'مدير النظام' : 'System Admin'),
-          printDate,
+          distributionItems: selectedReportTab === 'distribution' ? filteredDistributionItems : undefined,
+          summaryItems,
+          preparedBy: currentUser?.name || 'System Admin',
+          printDate: formattedPrintDate,
         });
 
         showToast(
@@ -2429,21 +3679,21 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800 print:hidden">
           <div>
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <FileBarChart className="w-6 h-6 text-[#E52225]" />
-              <span>{isAr ? 'مركز تقارير الفروع والتعليقات' : 'Comments & Branches Reports Center'}</span>
+              <span>{isAr ? 'مركز تقارير الفروع والتعليقات' : 'Branch Comments Reports Center'}</span>
             </h1>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={projects.length === 0}
+              disabled={!hasExportableData}
               onClick={handleExportExcel}
               className="group inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-emerald-600 hover:border-emerald-600 hover:text-white rounded-lg transition-colors disabled:opacity-50"
             >
@@ -2452,7 +3702,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             </button>
             <button
               type="button"
-              disabled={projects.length === 0 || exportingPdf}
+              disabled={!hasExportableData || exportingPdf}
               onClick={handleExportPDF}
               className="group inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-[#E52225] hover:border-[#E52225] hover:text-white rounded-lg transition-colors disabled:opacity-50"
             >
@@ -2479,131 +3729,458 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <aside className="lg:col-span-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-1">
-            {reportTemplates.map(tpl => (
-              <button
-                key={tpl.id}
-                type="button"
-                onClick={() => setSelectedReportTab(tpl.id)}
-                className={`w-full text-start px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                  selectedReportTab === tpl.id
-                    ? 'bg-[#E52225] text-white font-bold'
-                    : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-                }`}
+          <aside className="lg:col-span-4 space-y-3 print:hidden">
+            <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-2">
+              <label
+                htmlFor="comments-report-select"
+                className="block text-[11px] font-bold text-slate-500 dark:text-neutral-400"
               >
-                {tpl.label}
-              </button>
-            ))}
+                {isAr ? 'اختيار التقرير' : 'Select Report'}
+              </label>
+              <select
+                id="comments-report-select"
+                value={selectedReportTab}
+                onChange={e => setSelectedReportTab(e.target.value as typeof selectedReportTab)}
+                className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-100 focus:outline-none focus:border-[#E52225]"
+              >
+                {reportTemplates.map(tpl => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-500 dark:text-neutral-400 flex items-center gap-1.5">
+                  <Filter className="w-3.5 h-3.5 text-[#E52225]" />
+                  <span>{isAr ? 'تصفية التقرير' : 'Filter Report'}</span>
+                </span>
+                {(reportBoxFilter !== 'all' || reportSearch) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportBoxFilter('all');
+                      setReportSearch('');
+                    }}
+                    className="text-[11px] font-semibold text-[#E52225] hover:underline flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>{isAr ? 'إعادة ضبط' : 'Reset'}</span>
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                  {isAr ? 'البوكس' : 'Box'}
+                </label>
+                <select
+                  value={reportBoxFilter}
+                  onChange={e => setReportBoxFilter(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none focus:border-[#E52225]"
+                >
+                  <option value="all">{isAr ? `كل البوكسات (${sortedBoxes.length})` : `All Boxes (${sortedBoxes.length})`}</option>
+                  {sortedBoxes.map(b => (
+                    <option key={b.id} value={b.boxCode}>
+                      {b.boxCode} ({(b.totalDossiers || 6) === 2 ? (isAr ? 'شهري · 2' : 'Monthly · 2') : (isAr ? 'أسبوعي · 6' : 'Weekly · 6')})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                  {isAr ? 'بحث سريع' : 'Quick Search'}
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={reportSearch}
+                    onChange={e => setReportSearch(e.target.value)}
+                    placeholder={isAr ? 'بوكس، دوسيه، فرع، منطقة...' : 'Box, dossier, branch, region...'}
+                    className="w-full ps-8 pe-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none focus:border-[#E52225]"
+                  />
+                </div>
+              </div>
+            </div>
           </aside>
 
-          <div className="lg:col-span-8 bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5">
-            <div dir="rtl" className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-4">
+          <div className="lg:col-span-8 bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5 print:p-0 print:border-0 print:bg-white">
+            <div dir={isAr ? 'rtl' : 'ltr'} className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-3.5 print:shadow-none print:border-0">
+              {/* 1. Clean Corporate Header (English, matching Operations Reports) */}
               <div className="flex items-center justify-between gap-4 pb-1" dir="ltr">
-                <img src={logoColor} alt="Intercom" className="h-7 w-auto object-contain" />
-                <h3 className="text-base font-bold text-slate-900 text-center">Comments Archive Report</h3>
-                <img src={armsLogoLight} alt="ARMS" className="h-7 w-auto object-contain" />
+                <div className="shrink-0">
+                  <img src={logoColor} alt="Intercom" className="h-7 sm:h-8 w-auto object-contain" />
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight text-center min-w-0 leading-snug">
+                  {cleanTitleEn}
+                </h3>
+                <div className="shrink-0">
+                  <img src={armsLogoLight} alt="ARMS Archive Report Management System" className="h-7 sm:h-9 w-auto object-contain" />
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                <div><span className="font-bold">البوكسات:</span> {sortedBoxes.length}</div>
-                <div><span className="font-bold">الدوسيهات:</span> {sortedDossiers.length}</div>
-                <div><span className="font-bold">الفروع:</span> {projects.length}</div>
-                <div><span className="font-bold">المؤرشف:</span> {archivedCount} ({archivedPercent}%)</div>
+              {/* 2. Clear 2-Column English Metadata Box */}
+              <div
+                dir="ltr"
+                className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-600 shrink-0">Scope :</span>
+                    <span className="font-semibold text-slate-900">{scopeLabel}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-600 shrink-0">Total :</span>
+                    <span className="font-semibold text-slate-900 tabular-nums">{totalSummaryDisplay}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-600 shrink-0">Print Date :</span>
+                    <span className="text-slate-900 tabular-nums">{formattedPrintDate}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-600 shrink-0">Prepared By :</span>
+                    <span className="font-semibold text-slate-900 truncate">
+                      {currentUser?.name || 'System Admin'}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <table className="w-full border-collapse text-[11px] text-start">
-                <thead>
-                  {selectedReportTab === 'branches' && (
-                    <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">#</th>
-                      <th className="border border-slate-400 px-2 py-1.5">اسم الفرع</th>
-                      <th className="border border-slate-400 px-2 py-1.5">رقم الإرسالية</th>
-                      <th className="border border-slate-400 px-2 py-1.5">تاريخ بدء التشغيل</th>
-                      <th className="border border-slate-400 px-2 py-1.5">البوكس / الدوسيه</th>
-                      <th className="border border-slate-400 px-2 py-1.5">الحالة</th>
-                    </tr>
-                  )}
-                  {selectedReportTab === 'dossiers' && (
-                    <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
-                      <th className="border border-slate-400 px-2 py-1.5">الدوسيه</th>
-                      <th className="border border-slate-400 px-2 py-1.5">الأسبوع</th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">الفروع</th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">المؤرشف</th>
-                      <th className="border border-slate-400 px-2 py-1.5">الحالة</th>
-                    </tr>
-                  )}
-                  {selectedReportTab === 'summary' && (
-                    <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
-                      <th className="border border-slate-400 px-2 py-1.5">البوكس</th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">الدوسيهات</th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">إجمالي الفروع</th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center">المؤرشف</th>
-                      <th className="border border-slate-400 px-2 py-1.5">الحالة</th>
-                    </tr>
-                  )}
-                </thead>
-                <tbody>
-                  {selectedReportTab === 'branches' &&
-                    (projects.length ? (
-                      projects.slice(0, 60).map((p, idx) => (
-                        <tr key={p.jobId}>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{idx + 1}</td>
-                          <td className="border border-slate-300 px-2 py-1 font-semibold">{p.branchName}</td>
-                          <td className="border border-slate-300 px-2 py-1 font-mono">{p.shipmentNo}</td>
-                          <td className="border border-slate-300 px-2 py-1 tabular-nums">{fmtDate(p.startDate)}</td>
-                          <td className="border border-slate-300 px-2 py-1 font-mono">{p.boxId}-{p.dossierNumber}</td>
-                          <td className="border border-slate-300 px-2 py-1">{p.status}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={6} className="border border-slate-300 py-8 text-center text-slate-500">
-                          {isAr ? 'لا توجد بيانات بعد' : 'No records added yet'}
-                        </td>
-                      </tr>
-                    ))}
+              <div className="border-b-2 border-slate-700" />
 
-                  {selectedReportTab === 'dossiers' &&
-                    (sortedDossiers.length ? (
-                      sortedDossiers.map(d => (
-                        <tr key={d.id}>
-                          <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{d.id}</td>
-                          <td className="border border-slate-300 px-2 py-1 tabular-nums">{fmtDate(d.weekStart)} → {fmtDate(d.weekEnd)}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.totalProjects}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.archivedCount}</td>
-                          <td className="border border-slate-300 px-2 py-1">{d.status}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="border border-slate-300 py-8 text-center text-slate-500">
-                          {isAr ? 'لا توجد بيانات بعد' : 'No records added yet'}
-                        </td>
-                      </tr>
-                    ))}
+              {selectedReportTab === 'distribution' ? (
+                <div className="space-y-3">
+                  {filteredDistributionItems.length > 0 ? (
+                    filteredDistributionItems.map(box => {
+                      const slotCount = Math.max(box.dossiers.length, box.isMonthly ? 2 : 6);
+                      const slots = Array.from({ length: slotCount }, (_, i) => i + 1);
+                      return (
+                        <div
+                          key={box.boxCode}
+                          className="border border-slate-400 rounded-sm overflow-hidden bg-white break-inside-avoid"
+                        >
+                          <div className="bg-[#D9D9D9] border-b border-slate-400 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <span className="text-[12.5px] font-extrabold text-slate-900">
+                                {isAr ? `بوكس ${box.boxCode}` : `Box ${box.boxCode}`}
+                              </span>
+                              <span className="text-[10.5px] font-bold text-slate-800 bg-white/70 border border-slate-400/70 px-1.5 py-0.5 rounded">
+                                {box.isMonthly
+                                  ? isAr
+                                    ? 'شهري · 2 دوسيه'
+                                    : 'Monthly · 2'
+                                  : isAr
+                                  ? 'أسبوعي · 6 دوسيهات'
+                                  : 'Weekly · 6'}
+                              </span>
+                              <span className="text-[11px] font-bold text-slate-800 tabular-nums">
+                                {box.periodLabel}
+                              </span>
+                            </div>
 
-                  {selectedReportTab === 'summary' &&
-                    (sortedBoxes.length ? (
-                      sortedBoxes.map(b => (
-                        <tr key={b.id}>
-                          <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{b.boxCode}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
-                            {sortedDossiers.filter(d => d.boxId === b.boxCode).length} / 6
-                          </td>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.totalProjects}</td>
-                          <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.archivedProjects}</td>
-                          <td className="border border-slate-300 px-2 py-1">{b.status}</td>
+                            <div className="text-[10.5px] font-semibold text-slate-800 tabular-nums">
+                              {box.archivedProjects}/{box.totalProjects} {isAr ? 'مؤرشف' : 'Arch'} ·{' '}
+                              {box.foldersCount} {isAr ? 'منديل' : 'folders'} ·{' '}
+                              <span className="font-bold text-slate-900">{box.status}</span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2">
+                            {slots.map((slotNum, sIdx) => {
+                              const dossier =
+                                box.dossiers.find(d => d.dossierNumber === slotNum) || box.dossiers[sIdx];
+                              const isSecondRowOrLater = sIdx >= 2;
+                              const isSecondCol = sIdx % 2 === 1;
+                              const cellClasses = `px-3 py-2 bg-white border-slate-300 ${
+                                sIdx > 0 ? 'border-t sm:border-t-0' : ''
+                              } ${isSecondRowOrLater ? 'sm:border-t' : ''} ${
+                                isSecondCol ? 'sm:border-s' : ''
+                              }`;
+
+                              if (!dossier) {
+                                return (
+                                  <div
+                                    key={`${box.boxCode}-empty-${slotNum}`}
+                                    className={`${cellClasses} flex items-center justify-center text-[11px] text-slate-400 font-medium`}
+                                  >
+                                    {box.boxCode}-{slotNum} ({isAr ? 'فارغ' : 'Empty'})
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div
+                                  key={dossier.id}
+                                  className={`${cellClasses} flex flex-col justify-between gap-0.5`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[11.5px] font-bold text-slate-900">
+                                      {isAr
+                                        ? `دوسيه ${dossier.dossierNumber} (${dossier.id})`
+                                        : `Dossier ${dossier.dossierNumber} (${dossier.id})`}
+                                    </span>
+                                    <span className="text-[11px] font-semibold text-slate-700 tabular-nums">
+                                      {dossier.periodLabel}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-2 text-[10px]">
+                                    <span className="text-slate-600 tabular-nums">
+                                      {dossier.archivedCount}/{dossier.totalProjects}{' '}
+                                      {isAr ? 'مؤرشف' : 'Arch'} · {dossier.missingCount}{' '}
+                                      {isAr ? 'مفقود' : 'Miss'} · {dossier.foldersCount}{' '}
+                                      {isAr ? 'منديل' : 'folders'}
+                                    </span>
+                                    <span className="font-bold text-slate-900">{dossier.status}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="border border-slate-300 rounded-md py-10 text-center text-xs text-slate-500">
+                      {isAr ? 'لا توجد بوكسات مطابقة للتصفية الحالية' : 'No boxes match current filter'}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-[11px] text-start">
+                    <thead>
+                      {selectedReportTab === 'branches' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">#</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'اسم الفرع' : 'Branch Name'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'رقم الإرسالية' : 'Shipment'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'المنطقة' : 'Region'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المناديل' : 'Folders'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'تاريخ التشغيل' : 'Start Date'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'البوكس / الدوسيه' : 'Box / Dossier'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الحالة' : 'Status'}</th>
                         </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="border border-slate-300 py-8 text-center text-slate-500">
-                          {isAr ? 'لا توجد بيانات بعد' : 'No records added yet'}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
+                      )}
+                      {selectedReportTab === 'archived-boxes' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">#</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'البوكس' : 'Box'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'النظام' : 'System'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الفترة' : 'Period'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الدوسيهات' : 'Dossiers'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المؤرشف' : 'Archived'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المناديل' : 'Folders'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الحالة' : 'Status'}</th>
+                        </tr>
+                      )}
+                      {selectedReportTab === 'inprogress-boxes' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">#</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'البوكس' : 'Box'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الفترة' : 'Period'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الدوسيهات' : 'Dossiers'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المؤرشف' : 'Archived'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'مفقود' : 'Missing'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'انتظار' : 'Pending'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الإنجاز' : 'Rate'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الحالة' : 'Status'}</th>
+                        </tr>
+                      )}
+                      {selectedReportTab === 'dossiers' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الدوسيه' : 'Dossier'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الفترة' : 'Period'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الفروع' : 'Branches'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'مؤرشف' : 'Arch'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'مفقود' : 'Miss'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'انتظار' : 'Pend'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المناديل' : 'Folders'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الحالة' : 'Status'}</th>
+                        </tr>
+                      )}
+                      {selectedReportTab === 'box-details' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'البوكس' : 'Box'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'النظام' : 'System'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الفترة' : 'Period'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الدوسيهات' : 'Dossiers'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'الفروع' : 'Branches'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'مؤرشف' : 'Arch'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'مفقود' : 'Miss'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'انتظار' : 'Pend'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'المناديل' : 'Folders'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'الحالة' : 'Status'}</th>
+                        </tr>
+                      )}
+                      {selectedReportTab === 'archive-summary' && (
+                        <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">#</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'البند' : 'Metric'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5 text-center">{isAr ? 'العدد / القيمة' : 'Count / Value'}</th>
+                          <th className="border border-slate-400 px-2 py-1.5">{isAr ? 'ملاحظات' : 'Notes'}</th>
+                        </tr>
+                      )}
+                    </thead>
+                    <tbody>
+                      {selectedReportTab === 'branches' &&
+                        (reportProjects.length ? (
+                          reportProjects.slice(0, 60).map((p, idx) => (
+                            <tr key={p.jobId}>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{idx + 1}</td>
+                              <td className="border border-slate-300 px-2 py-1 font-semibold">{p.branchName}</td>
+                              <td className="border border-slate-300 px-2 py-1 font-mono">{p.shipmentNo}</td>
+                              <td className="border border-slate-300 px-2 py-1">{p.region || '—'}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{p.folderCount ?? 0}</td>
+                              <td className="border border-slate-300 px-2 py-1 tabular-nums">{fmtDate(p.startDate)}</td>
+                              <td className="border border-slate-300 px-2 py-1 font-mono">{p.boxId}-{p.dossierNumber}</td>
+                              <td className="border border-slate-300 px-2 py-1">{p.status}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={8} className="border border-slate-300 py-8 text-center text-slate-500">
+                              {isAr ? 'لا توجد بيانات مطابقة' : 'No matching records'}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {selectedReportTab === 'archived-boxes' &&
+                        (completedBoxes.length ? (
+                          completedBoxes.map((b, idx) => {
+                            const meta = boxMetaMap.get(b.boxCode);
+                            return (
+                              <tr key={b.id}>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{idx + 1}</td>
+                                <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{b.boxCode}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center">
+                                  {meta?.isMonthly ? (isAr ? 'شهري (2)' : 'Monthly (2)') : isAr ? 'أسبوعي (6)' : 'Weekly (6)'}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 tabular-nums">{meta?.periodLabel || '—'}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
+                                  {meta?.filledDossiers ?? 0} / {meta?.totalDossiers ?? 6}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums font-semibold">
+                                  {b.archivedProjects} / {b.totalProjects}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{meta?.foldersCount ?? 0}</td>
+                                <td className="border border-slate-300 px-2 py-1 font-semibold">{b.status}</td>
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={8} className="border border-slate-300 py-8 text-center text-slate-500">
+                              {isAr ? 'لا توجد بوكسات مكتملة مطابقة' : 'No completed boxes found'}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {selectedReportTab === 'inprogress-boxes' &&
+                        (inprogressBoxes.length ? (
+                          inprogressBoxes.map((b, idx) => {
+                            const meta = boxMetaMap.get(b.boxCode);
+                            const pct = b.totalProjects > 0 ? Math.round((b.archivedProjects / b.totalProjects) * 100) : 0;
+                            return (
+                              <tr key={b.id}>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{idx + 1}</td>
+                                <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{b.boxCode}</td>
+                                <td className="border border-slate-300 px-2 py-1 tabular-nums">{meta?.periodLabel || '—'}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
+                                  {meta?.filledDossiers ?? 0} / {meta?.totalDossiers ?? 6}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
+                                  {b.archivedProjects} / {b.totalProjects}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.missingProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.pendingProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums font-bold">{pct}%</td>
+                                <td className="border border-slate-300 px-2 py-1">{b.status}</td>
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={9} className="border border-slate-300 py-8 text-center text-slate-500">
+                              {isAr ? 'لا توجد بوكسات جارية مطابقة' : 'No in-progress boxes found'}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {selectedReportTab === 'dossiers' &&
+                        (reportDossiers.length ? (
+                          reportDossiers.map(d => (
+                            <tr key={d.id}>
+                              <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{d.id}</td>
+                              <td className="border border-slate-300 px-2 py-1 tabular-nums">{fmtDate(d.weekStart)} → {fmtDate(d.weekEnd)}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.totalProjects}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.archivedCount}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.missingCount}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{d.pendingCount}</td>
+                              <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
+                                {dossierFoldersMap.get(d.id) ?? dossierFoldersMap.get(`${d.boxId}-${d.dossierNumber}`) ?? 0}
+                              </td>
+                              <td className="border border-slate-300 px-2 py-1">{d.status}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={8} className="border border-slate-300 py-8 text-center text-slate-500">
+                              {isAr ? 'لا توجد بيانات مطابقة' : 'No matching records'}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {selectedReportTab === 'box-details' &&
+                        (reportBoxes.length ? (
+                          reportBoxes.map(b => {
+                            const meta = boxMetaMap.get(b.boxCode);
+                            return (
+                              <tr key={b.id}>
+                                <td className="border border-slate-300 px-2 py-1 font-mono font-bold">{b.boxCode}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center">
+                                  {meta?.isMonthly ? (isAr ? 'شهري' : 'Monthly') : isAr ? 'أسبوعي' : 'Weekly'}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 tabular-nums">{meta?.periodLabel || '—'}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">
+                                  {meta?.completedDossiers ?? 0} / {meta?.filledDossiers ?? 0} / {meta?.totalDossiers ?? 6}
+                                </td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.totalProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.archivedProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.missingProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{b.pendingProjects}</td>
+                                <td className="border border-slate-300 px-2 py-1 text-center tabular-nums">{meta?.foldersCount ?? 0}</td>
+                                <td className="border border-slate-300 px-2 py-1">{b.status}</td>
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan={10} className="border border-slate-300 py-8 text-center text-slate-500">
+                              {isAr ? 'لا توجد بيانات مطابقة' : 'No matching records'}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {selectedReportTab === 'archive-summary' &&
+                        archiveSummaryRows.map((row, idx) => (
+                          <tr key={row.metric}>
+                            <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
+                            <td className="border border-slate-300 px-2 py-1.5 font-bold">{row.metric}</td>
+                            <td className="border border-slate-300 px-2 py-1.5 text-center font-bold tabular-nums">{row.value}</td>
+                            <td className="border border-slate-300 px-2 py-1.5 text-slate-600">{row.notes}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2622,21 +4199,17 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
         <div>
           <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-            {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+            {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
           </div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <FileSpreadsheet className="w-6 h-6 text-[#E52225]" />
-            <span>{isAr ? 'استيراد شيت الفروع والإرساليات' : 'Import Branches Plan Sheet'}</span>
+            <span>{isAr ? 'استيراد شيت الفروع والإرساليات' : 'Import Branches Sheet'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {isAr
-              ? 'رفع شيت الفروع (اسم الفرع · رقم الإرسالية · تاريخ بدء التشغيل) لتقسيمه على أسابيع داخل البوكسات (6 دوسيهات لكل بوكس).'
-              : 'Upload branch sheets (Branch Name, Shipment No., Start Date) to organize into weekly dossiers and boxes.'}
-          </p>
         </div>
       </div>
 
       <MinutesPlanImport />
+      {renderDeleteUploadModal()}
 
       <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-neutral-800 text-sm font-bold text-slate-900 dark:text-white">
@@ -2657,6 +4230,9 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                   <th className="px-3 py-2.5 text-end">{isAr ? 'المستورد' : 'Imported'}</th>
                   <th className="px-3 py-2.5 text-end">{isAr ? 'مكرر' : 'Duplicates'}</th>
                   <th className="px-5 py-2.5 text-end">{isAr ? 'الحالة' : 'Status'}</th>
+                  {isSystemAdmin && (
+                    <th className="px-3 py-2.5 text-center">{isAr ? 'إجراء' : 'Action'}</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -2668,6 +4244,21 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                     <td className="px-3 py-2.5 text-end font-bold tabular-nums">{u.importedCount}</td>
                     <td className="px-3 py-2.5 text-end text-amber-600 tabular-nums">{u.duplicateCount}</td>
                     <td className="px-5 py-2.5 text-end text-emerald-600 font-semibold">{u.status}</td>
+                    {isSystemAdmin && (
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetUploadId(u.id);
+                            setDeleteModalOpen(true);
+                          }}
+                          title={isAr ? 'مسح هذه الرفعة' : 'Delete this upload'}
+                          className="p-1.5 text-[#E52225] hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

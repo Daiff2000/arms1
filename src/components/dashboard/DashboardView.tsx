@@ -45,8 +45,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         : 'Pallet Handover Reports'
       : activeWorkspace === 'minutes-archive'
       ? isAr
-        ? 'أرشفة التعليقات'
-        : 'Comments Archive'
+        ? 'أرشفة تعليقات الفروع'
+        : 'Branch Comments Archive'
       : isAr
       ? 'أرشفة تقارير التشغيل'
       : 'Operations Reports Archive';
@@ -141,11 +141,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
             {isAr ? 'لوحة المتابعة والتحكم' : 'Archive Operations Dashboard'}
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {isAr
-              ? 'نظرة شاملة على الأرشفة وحالة البوكسات.'
-              : 'High-level overview of archiving progress and box capacity.'}
-          </p>
         </div>
 
         <button

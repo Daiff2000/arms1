@@ -169,8 +169,8 @@ function MainApp() {
           : 'Pallet Handover Reports'
         : activeWorkspace === 'minutes-archive'
         ? isAr
-          ? 'أرشفة التعليقات'
-          : 'Comments Archive'
+          ? 'أرشفة تعليقات الفروع'
+          : 'Branch Comments Archive'
         : isAr
         ? 'أرشفة تقارير التشغيل'
         : 'Operations Reports';

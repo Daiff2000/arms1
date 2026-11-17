@@ -84,13 +84,8 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ initialFilter }) => 
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <FileText className="w-6 h-6 text-[#0B56A8]" />
-            <span>{language === 'ar' ? 'سجل المشاريع (Projects)' : 'Projects Directory'}</span>
+            <span>{language === 'ar' ? 'سجل المشاريع' : 'Projects Directory'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {language === 'ar'
-              ? 'استعراض وتحديث حالات المشاريع ومواقعها داخل البوكسات والدوسيهات.'
-              : 'Browse, search, and update project archiving statuses across boxes and dossiers.'}
-          </p>
         </div>
 
         <div className="text-xs text-slate-500">

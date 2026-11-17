@@ -225,6 +225,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(400).json({ error: `Box ${b.boxCode} must contain exactly 300 project slots and 6 dossiers.` });
         }
       }
+      if (user.role !== 'System Admin') {
+        const [counts] = await withTimeout(
+          sql`SELECT
+            (SELECT COUNT(*)::int FROM arms_boxes) AS b_count,
+            (SELECT COUNT(*)::int FROM arms_upload_history) AS u_count`
+        );
+        if (
+          state.boxes.length < Number(counts?.b_count || 0) ||
+          state.uploadHistory.length < Number(counts?.u_count || 0)
+        ) {
+          return res.status(403).json({ error: 'مسح الرفعات أو بيانات الأرشيف متاح لمدير النظام (System Admin) فقط.' });
+        }
+      }
       try {
         // Non-admins never receive the audit log, so their payload only carries NEW entries.
         // Merge those into the existing log (append-only) instead of letting the save replace it.

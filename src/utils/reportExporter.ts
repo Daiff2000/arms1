@@ -595,15 +595,171 @@ export interface CommentsReportColumn {
   align?: 'start' | 'center';
 }
 
+export interface CommentsBoxDistributionDossier {
+  id: string;
+  dossierNumber: number;
+  periodLabel: string;
+  totalProjects: number;
+  archivedCount: number;
+  missingCount: number;
+  pendingCount: number;
+  foldersCount: number;
+  status: string;
+}
+
+export interface CommentsBoxDistributionItem {
+  boxCode: string;
+  totalDossiers: number;
+  isMonthly: boolean;
+  periodLabel: string;
+  totalProjects: number;
+  archivedProjects: number;
+  missingProjects: number;
+  pendingProjects: number;
+  foldersCount: number;
+  status: string;
+  dossiers: CommentsBoxDistributionDossier[];
+}
+
 export interface CommentsReportExportOptions {
-  reportId: 'branches' | 'dossiers' | 'summary';
+  reportId:
+    | 'branches'
+    | 'dossiers'
+    | 'summary'
+    | 'distribution'
+    | 'archived-boxes'
+    | 'inprogress-boxes'
+    | 'box-details'
+    | 'archive-summary';
   reportTitle: string;
+  scopeLabel?: string;
+  totalSummary?: string;
   isAr: boolean;
   columns: CommentsReportColumn[];
   rows: Record<string, string | number>[];
+  distributionItems?: CommentsBoxDistributionItem[];
   summaryItems: { label: string; value: string }[];
   preparedBy: string;
   printDate: string;
+}
+
+function drawCommentsPageHeaderAndFooter(
+  ctx: CanvasRenderingContext2D,
+  opts: CommentsReportExportOptions,
+  logoImg: HTMLImageElement | null,
+  armsLogoImg: HTMLImageElement | null,
+  pageIdx: number,
+  totalPages: number
+) {
+  const W = 1260;
+  const H = 1782;
+  const M = 60;
+  const CONTENT_W = W - M * 2;
+
+  const scopeText = opts.scopeLabel || 'All Boxes';
+  const totalText =
+    opts.totalSummary ||
+    opts.summaryItems.map(item => `${item.label}: ${item.value}`).join(' · ');
+
+  // White page
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, W, H);
+
+  // 1. Top Corporate Header (LTR: Intercom left, English Title center, ARMS right)
+  ctx.direction = 'ltr';
+  if (logoImg) {
+    const logoH = 42;
+    const logoW = logoH * (logoImg.naturalWidth / Math.max(1, logoImg.naturalHeight));
+    ctx.drawImage(logoImg, M, 42, logoW, logoH);
+  } else {
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 28px "Inter", Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Intercom', M, 74);
+  }
+
+  ctx.fillStyle = '#0F172A';
+  ctx.font = 'bold 28px "Inter", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(opts.reportTitle, W / 2, 72);
+
+  if (armsLogoImg) {
+    const armsH = 46;
+    const armsW = armsH * (armsLogoImg.naturalWidth / Math.max(1, armsLogoImg.naturalHeight));
+    ctx.drawImage(armsLogoImg, W - M - armsW, 40, armsW, armsH);
+  } else {
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 24px "Inter", Arial, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('ARMS', W - M, 70);
+  }
+
+  // 2. Clean 2-Column English Metadata Box (matching Operations Reports)
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(M, 106, CONTENT_W, 104);
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(M, 106, CONTENT_W, 104);
+
+  const metaLeftX = M + 22;
+  const metaRightX = W / 2 + 34;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 17px "Inter", Arial, sans-serif';
+  ctx.fillText('Scope :', metaLeftX, 144);
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '600 17px "Inter", Arial, sans-serif';
+  ctx.fillText(truncateText(ctx, scopeText, W / 2 - metaLeftX - 105), metaLeftX + 94, 144);
+
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 17px "Inter", Arial, sans-serif';
+  ctx.fillText('Total :', metaLeftX, 184);
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '600 17px "Inter", Arial, sans-serif';
+  ctx.fillText(truncateText(ctx, totalText, W / 2 - metaLeftX - 105), metaLeftX + 94, 184);
+
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 17px "Inter", Arial, sans-serif';
+  ctx.fillText('Print Date :', metaRightX, 144);
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '600 17px "Inter", Arial, sans-serif';
+  ctx.fillText(truncateText(ctx, opts.printDate, W - M - metaRightX - 155), metaRightX + 140, 144);
+
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 17px "Inter", Arial, sans-serif';
+  ctx.fillText('Prepared By :', metaRightX, 184);
+  ctx.fillStyle = '#0F172A';
+  ctx.font = '600 17px "Inter", "Cairo", Arial, sans-serif';
+  ctx.fillText(
+    truncateText(ctx, opts.preparedBy || 'System Admin', W - M - metaRightX - 155),
+    metaRightX + 140,
+    184
+  );
+
+  // Clean dark divider rule
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(M, 228);
+  ctx.lineTo(W - M, 228);
+  ctx.stroke();
+
+  // Footer
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(M, H - 56);
+  ctx.lineTo(W - M, H - 56);
+  ctx.stroke();
+
+  ctx.direction = 'ltr';
+  ctx.fillStyle = '#475569';
+  ctx.font = '600 14px "Inter", Arial, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Intercom ARMS', M, H - 28);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Page ${pageIdx + 1} of ${totalPages}`, W - M, H - 28);
 }
 
 export async function exportCommentsReportToPDF(opts: CommentsReportExportOptions): Promise<string> {
@@ -635,6 +791,211 @@ export async function exportCommentsReportToPDF(opts: CommentsReportExportOption
     format: 'a4',
   });
 
+  // Specialized Boxes & Dossiers Distribution Cards Renderer
+  if (opts.distributionItems) {
+    const START_Y = 256;
+    const MAX_Y = H - 80;
+    const CARD_GAP = 20;
+    const HEADER_H = 52;
+    const DOSSIER_ROW_H = 74;
+    const HALF_W = CONTENT_W / 2;
+
+    const getCardHeight = (box: CommentsBoxDistributionItem) => {
+      const slotCount = Math.max(box.dossiers.length, box.isMonthly ? 2 : 6);
+      const rows = Math.max(1, Math.ceil(slotCount / 2));
+      return HEADER_H + rows * DOSSIER_ROW_H;
+    };
+
+    const distPages: CommentsBoxDistributionItem[][] = [];
+    if (opts.distributionItems.length === 0) {
+      distPages.push([]);
+    } else {
+      let currentPage: CommentsBoxDistributionItem[] = [];
+      let cursorY = START_Y;
+      for (const box of opts.distributionItems) {
+        const ch = getCardHeight(box);
+        if (currentPage.length > 0 && cursorY + ch > MAX_Y) {
+          distPages.push(currentPage);
+          currentPage = [box];
+          cursorY = START_Y + ch + CARD_GAP;
+        } else {
+          currentPage.push(box);
+          cursorY += ch + CARD_GAP;
+        }
+      }
+      if (currentPage.length > 0) distPages.push(currentPage);
+    }
+
+    for (let pageIdx = 0; pageIdx < distPages.length; pageIdx++) {
+      const pageBoxes = distPages[pageIdx];
+      const canvas = document.createElement('canvas');
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d')!;
+
+      drawCommentsPageHeaderAndFooter(ctx, opts, logoImg, armsLogoImg, pageIdx, distPages.length);
+
+      if (pageBoxes.length === 0) {
+        ctx.strokeStyle = '#CBD5E1';
+        ctx.strokeRect(M, START_Y, CONTENT_W, 74);
+        ctx.fillStyle = '#64748B';
+        ctx.font = '500 16px "Cairo", "Inter", Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(opts.isAr ? 'لا توجد بوكسات مطابقة' : 'No matching boxes', W / 2, START_Y + 44);
+      } else {
+        let cardY = START_Y;
+        for (const box of pageBoxes) {
+          const slotCount = Math.max(box.dossiers.length, box.isMonthly ? 2 : 6);
+          const rows = Math.max(1, Math.ceil(slotCount / 2));
+          const cardH = HEADER_H + rows * DOSSIER_ROW_H;
+
+          // Box header band
+          ctx.fillStyle = '#D9D9D9';
+          ctx.fillRect(M, cardY, CONTENT_W, HEADER_H);
+          ctx.strokeStyle = '#64748B';
+          ctx.lineWidth = 1.3;
+          ctx.strokeRect(M, cardY, CONTENT_W, cardH);
+
+          ctx.beginPath();
+          ctx.moveTo(M, cardY + HEADER_H);
+          ctx.lineTo(M + CONTENT_W, cardY + HEADER_H);
+          ctx.stroke();
+
+          ctx.direction = opts.isAr ? 'rtl' : 'ltr';
+          const typeTag = box.isMonthly
+            ? opts.isAr
+              ? 'شهري (2 دوسيه)'
+              : 'Monthly (2)'
+            : opts.isAr
+            ? 'أسبوعي (6 دوسيهات)'
+            : 'Weekly (6)';
+
+          const leftBannerText = opts.isAr
+            ? `بوكس ${box.boxCode}  ·  ${typeTag}  ·  ${box.periodLabel}`
+            : `Box ${box.boxCode}  ·  ${typeTag}  ·  ${box.periodLabel}`;
+          const rightBannerText = opts.isAr
+            ? `${box.archivedProjects}/${box.totalProjects} مؤرشف · ${box.foldersCount} منديل · ${box.status}`
+            : `${box.archivedProjects}/${box.totalProjects} Archived · ${box.foldersCount} folders · ${box.status}`;
+
+          ctx.fillStyle = '#0F172A';
+          ctx.font = 'bold 16.5px "Cairo", "Inter", Arial, sans-serif';
+          if (opts.isAr) {
+            ctx.textAlign = 'right';
+            ctx.fillText(truncateText(ctx, leftBannerText, CONTENT_W * 0.56), M + CONTENT_W - 18, cardY + 32);
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#1E293B';
+            ctx.font = '600 15px "Cairo", "Inter", Arial, sans-serif';
+            ctx.fillText(truncateText(ctx, rightBannerText, CONTENT_W * 0.4), M + 18, cardY + 32);
+          } else {
+            ctx.textAlign = 'left';
+            ctx.fillText(truncateText(ctx, leftBannerText, CONTENT_W * 0.56), M + 18, cardY + 32);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#1E293B';
+            ctx.font = '600 15px "Cairo", "Inter", Arial, sans-serif';
+            ctx.fillText(truncateText(ctx, rightBannerText, CONTENT_W * 0.4), M + CONTENT_W - 18, cardY + 32);
+          }
+
+          // 2-column grid of dossiers
+          for (let r = 0; r < rows; r++) {
+            const rowY = cardY + HEADER_H + r * DOSSIER_ROW_H;
+            if (r > 0) {
+              ctx.strokeStyle = '#CBD5E1';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(M, rowY);
+              ctx.lineTo(M + CONTENT_W, rowY);
+              ctx.stroke();
+            }
+
+            for (let c = 0; c < 2; c++) {
+              const dIdx = r * 2 + c;
+              // In RTL put col 0 on the right half so dossier 1 is right, dossier 2 is left
+              const visualCol = opts.isAr ? 1 - c : c;
+              const cellX = M + visualCol * HALF_W;
+
+              if (c === 0) {
+                ctx.strokeStyle = '#CBD5E1';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(M + HALF_W, rowY);
+                ctx.lineTo(M + HALF_W, rowY + DOSSIER_ROW_H);
+                ctx.stroke();
+              }
+
+              const dossier = box.dossiers.find(d => d.dossierNumber === dIdx + 1) || box.dossiers[dIdx];
+              if (!dossier) {
+                ctx.fillStyle = '#94A3B8';
+                ctx.font = '500 14px "Cairo", "Inter", Arial, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(
+                  opts.isAr ? `${box.boxCode}-${dIdx + 1} (فارغ)` : `${box.boxCode}-${dIdx + 1} (Empty)`,
+                  cellX + HALF_W / 2,
+                  rowY + 42
+                );
+                continue;
+              }
+
+              const topTitle = opts.isAr
+                ? `دوسيه ${dossier.dossierNumber} (${dossier.id})`
+                : `Dossier ${dossier.dossierNumber} (${dossier.id})`;
+              const bottomStats = opts.isAr
+                ? `${dossier.archivedCount}/${dossier.totalProjects} مؤرشف · ${dossier.missingCount} مفقود · ${dossier.foldersCount} منديل`
+                : `${dossier.archivedCount}/${dossier.totalProjects} Arch · ${dossier.missingCount} Miss · ${dossier.foldersCount} folders`;
+
+              ctx.fillStyle = '#0F172A';
+              ctx.font = 'bold 15.5px "Cairo", "Inter", Arial, sans-serif';
+              if (opts.isAr) {
+                ctx.textAlign = 'right';
+                ctx.fillText(topTitle, cellX + HALF_W - 16, rowY + 28);
+                ctx.textAlign = 'left';
+                ctx.font = '600 14.5px "Inter", Arial, sans-serif';
+                ctx.fillStyle = '#334155';
+                ctx.fillText(dossier.periodLabel, cellX + 16, rowY + 28);
+
+                ctx.textAlign = 'right';
+                ctx.fillStyle = '#475569';
+                ctx.font = '500 14px "Cairo", "Inter", Arial, sans-serif';
+                ctx.fillText(truncateText(ctx, bottomStats, HALF_W - 120), cellX + HALF_W - 16, rowY + 56);
+                ctx.textAlign = 'left';
+                ctx.fillStyle = '#0F172A';
+                ctx.font = 'bold 14px "Inter", Arial, sans-serif';
+                ctx.fillText(dossier.status, cellX + 16, rowY + 56);
+              } else {
+                ctx.textAlign = 'left';
+                ctx.fillText(topTitle, cellX + 16, rowY + 28);
+                ctx.textAlign = 'right';
+                ctx.font = '600 14.5px "Inter", Arial, sans-serif';
+                ctx.fillStyle = '#334155';
+                ctx.fillText(dossier.periodLabel, cellX + HALF_W - 16, rowY + 28);
+
+                ctx.textAlign = 'left';
+                ctx.fillStyle = '#475569';
+                ctx.font = '500 14px "Inter", Arial, sans-serif';
+                ctx.fillText(truncateText(ctx, bottomStats, HALF_W - 120), cellX + 16, rowY + 56);
+                ctx.textAlign = 'right';
+                ctx.fillStyle = '#0F172A';
+                ctx.font = 'bold 14px "Inter", Arial, sans-serif';
+                ctx.fillText(dossier.status, cellX + HALF_W - 16, rowY + 56);
+              }
+            }
+          }
+
+          cardY += cardH + CARD_GAP;
+        }
+      }
+
+      if (pageIdx > 0) {
+        pdf.addPage('a4', 'portrait');
+      }
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      pdf.addImage(imgData, 'PNG', 0, 0, 210, 297);
+    }
+
+    const fileName = `ARMS_Comments_${opts.reportId}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    pdf.save(fileName);
+    return fileName;
+  }
+
   const allCols: CommentsReportColumn[] = [
     { key: '__idx', label: '#', weight: 0.55, align: 'center' },
     ...opts.columns,
@@ -652,91 +1013,9 @@ export async function exportCommentsReportToPDF(opts: CommentsReportExportOption
     canvas.height = H;
     const ctx = canvas.getContext('2d')!;
 
-    // White page
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, W, H);
-
-    // 1. Corporate Header (LTR fixed positions for logos)
-    ctx.direction = 'ltr';
-    if (logoImg) {
-      const logoH = 42;
-      const logoW = logoH * (logoImg.naturalWidth / Math.max(1, logoImg.naturalHeight));
-      ctx.drawImage(logoImg, M, 40, logoW, logoH);
-    } else {
-      ctx.fillStyle = '#0F172A';
-      ctx.font = 'bold 28px "Inter", Arial, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText('Intercom', M, 72);
-    }
+    drawCommentsPageHeaderAndFooter(ctx, opts, logoImg, armsLogoImg, pageIdx, pages.length);
 
     ctx.direction = opts.isAr ? 'rtl' : 'ltr';
-    ctx.fillStyle = '#0F172A';
-    ctx.font = 'bold 26px "Cairo", "Inter", Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(opts.reportTitle, W / 2, 70);
-
-    ctx.direction = 'ltr';
-    if (armsLogoImg) {
-      const armsH = 44;
-      const armsW = armsH * (armsLogoImg.naturalWidth / Math.max(1, armsLogoImg.naturalHeight));
-      ctx.drawImage(armsLogoImg, W - M - armsW, 38, armsW, armsH);
-    } else {
-      ctx.fillStyle = '#0F172A';
-      ctx.font = 'bold 24px "Inter", Arial, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText('ARMS', W - M, 70);
-    }
-
-    // 2. Metadata & Summary Box
-    ctx.fillStyle = '#F8FAFC';
-    ctx.fillRect(M, 102, CONTENT_W, 114);
-    ctx.strokeStyle = '#CBD5E1';
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(M, 102, CONTENT_W, 114);
-
-    ctx.direction = opts.isAr ? 'rtl' : 'ltr';
-    const sumCols = Math.max(1, opts.summaryItems.length);
-    const sumCellW = CONTENT_W / sumCols;
-    opts.summaryItems.forEach((item, idx) => {
-      const cellOrigin = opts.isAr ? W - M - idx * sumCellW - 22 : M + idx * sumCellW + 22;
-      ctx.textAlign = opts.isAr ? 'right' : 'left';
-      ctx.fillStyle = '#64748B';
-      ctx.font = 'bold 15px "Cairo", "Inter", Arial, sans-serif';
-      ctx.fillText(`${item.label}:`, cellOrigin, 134);
-      ctx.fillStyle = '#0F172A';
-      ctx.font = 'bold 17px "Cairo", "Inter", Arial, sans-serif';
-      ctx.fillText(item.value, cellOrigin, 158);
-    });
-
-    // Meta row inside summary box (Print Date + Prepared By)
-    ctx.strokeStyle = '#E2E8F0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(M, 174);
-    ctx.lineTo(W - M, 174);
-    ctx.stroke();
-
-    ctx.fillStyle = '#475569';
-    ctx.font = '600 14.5px "Cairo", "Inter", Arial, sans-serif';
-    if (opts.isAr) {
-      ctx.textAlign = 'right';
-      ctx.fillText(`أعدّه: ${opts.preparedBy || 'مدير النظام'}`, W - M - 22, 200);
-      ctx.textAlign = 'left';
-      ctx.fillText(`تاريخ الطباعة: ${opts.printDate}`, M + 22, 200);
-    } else {
-      ctx.textAlign = 'left';
-      ctx.fillText(`Prepared By: ${opts.preparedBy || 'System Admin'}`, M + 22, 200);
-      ctx.textAlign = 'right';
-      ctx.fillText(`Print Date: ${opts.printDate}`, W - M - 22, 200);
-    }
-
-    // Divider line under metadata
-    ctx.strokeStyle = '#E52225';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(M, 234);
-    ctx.lineTo(W - M, 234);
-    ctx.stroke();
 
     // 3. Table Header
     ctx.fillStyle = '#D9D9D9';
@@ -832,26 +1111,6 @@ export async function exportCommentsReportToPDF(opts: CommentsReportExportOption
     }
 
     globalOffset += pageRows.length;
-
-    // 5. Footer
-    ctx.strokeStyle = '#E2E8F0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(M, H - 56);
-    ctx.lineTo(W - M, H - 56);
-    ctx.stroke();
-
-    ctx.direction = 'ltr';
-    ctx.fillStyle = '#475569';
-    ctx.font = '600 14px "Inter", Arial, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('Intercom ARMS · Comments Archive', M, H - 28);
-    ctx.textAlign = 'right';
-    ctx.fillText(
-      opts.isAr ? `صفحة ${pageIdx + 1} من ${pages.length}` : `Page ${pageIdx + 1} of ${pages.length}`,
-      W - M,
-      H - 28
-    );
 
     if (pageIdx > 0) {
       pdf.addPage('a4', 'portrait');

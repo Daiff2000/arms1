@@ -1,8 +1,14 @@
 import * as XLSX from 'xlsx';
 import type { Box, Dossier, Project, UploadRecord, WorkspaceArchiveStore } from '../types';
 
-/** Rules: 1 dossier = 1 working week (Sunday → Thursday). 1 box = 6 dossiers (6 weeks). */
+/** Rules:
+ * - Starts from Month 6 (June) at Box C13 (default startBoxNumber = 13).
+ * - First 2 boxes (C13, C14): 2 monthly dossiers per box (C13: Jun & Jul; C14: Aug & Sep).
+ * - From Box C15 onwards (Month 10+): 1 dossier = 1 working week (Sunday → Thursday), 6 dossiers per box.
+ */
 export const DOSSIERS_PER_BOX = 6;
+export const MONTHLY_DOSSIERS_PER_BOX = 2;
+export const START_MONTH = 6; // June
 
 export interface PlanRow {
   sourceRow: number;
@@ -74,6 +80,12 @@ export const isWeekend = (isoDate: string) => {
   return dow === 5 || dow === 6;
 };
 
+export const monthStartOf = (year: number, month: number) => iso(year, month, 1);
+export const monthEndOf = (year: number, month: number) => {
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return iso(year, month, lastDay);
+};
+
 function parseRowStatus(raw: unknown): 'Archived' | 'Missing' | 'Pending' {
   const v = norm(raw).toLowerCase();
   if (!v) return 'Pending';
@@ -82,30 +94,43 @@ function parseRowStatus(raw: unknown): 'Archived' | 'Missing' | 'Pending' {
   return 'Pending';
 }
 
+const normHeader = (v: unknown) =>
+  norm(v)
+    .replace(/ة/g, 'ه')
+    .toLowerCase();
+
 /** Finds the plan sheet by its header names (not by sheet name) and extracts rows. */
 export function parsePlanWorkbook(wb: XLSX.WorkBook): ParseResult {
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true, defval: null });
     for (let h = 0; h < Math.min(matrix.length, 10); h++) {
-      const header = (matrix[h] || []).map(norm);
+      const header = (matrix[h] || []).map(normHeader);
       const find = (pred: (t: string) => boolean) => header.findIndex(t => t && pred(t));
-      const cName = find(t => t.includes('اسم الفرع') || t === 'الفرع' || t.toLowerCase() === 'branch name');
-      const cShip = find(t => t.includes('رقم الارسالية') || t.includes('الارسالية') || t.toLowerCase().includes('shipment'));
+      const cName = find(t => t.includes('اسم الفرع') || t === 'الفرع' || t === 'branch name' || t === 'branch');
+      const cShip = find(t => t.includes('رقم الارساليه') || t.includes('الارساليه') || t.includes('shipment'));
       const cStart = find(
         t =>
           t.includes('تاريخ بدء') ||
           t.includes('تاريخ التشغيل') ||
-          t.includes('بداية التشغيل') ||
-          t.toLowerCase().includes('start date')
+          t.includes('بدايه التشغيل') ||
+          t.includes('تاريخ البدء') ||
+          t.includes('start date')
       );
       if ([cName, cShip, cStart].some(c => c < 0)) continue;
-      const cFold = find(t => t.includes('عدد المناديل') || t.includes('المناديل'));
-      const cCode = find(t => t.includes('كود الفرع'));
-      const cRegion = find(t => t === 'المنطقة' || t.includes('المنطقة'));
-      const cWing = find(t => t === 'الجناح' || t.includes('الجناح'));
-      const cEnd = find(t => t.includes('تاريخ نهاية') || t.includes('تاريخ الانتهاء'));
-      const cStatus = find(t => t === 'الحالة' || t.includes('حالة الارشفة') || t.toLowerCase() === 'status');
+      const cFold = find(
+        t =>
+          t.includes('عدد المناديل') ||
+          t.includes('المناديل') ||
+          t.includes('عدد المنديل') ||
+          t.includes('المنديل') ||
+          t.includes('folders')
+      );
+      const cCode = find(t => t.includes('كود الفرع') || t.includes('branch code'));
+      const cRegion = find(t => t === 'المنطقه' || t.includes('المنطقه') || t === 'منطقه' || t === 'region' || t === 'area');
+      const cWing = find(t => t === 'الجناح' || t.includes('الجناح') || t === 'wing' || t.includes('القطاع'));
+      const cEnd = find(t => t.includes('تاريخ نهايه') || t.includes('تاريخ الانتهاء') || t.includes('end date'));
+      const cStatus = find(t => t === 'الحاله' || t.includes('حاله الارشفه') || t === 'status');
 
       const rows: PlanRow[] = [];
       const rejected: ParseResult['rejected'] = [];
@@ -145,6 +170,8 @@ export interface PlanWeekPreview {
   weekEnd: string;
   boxCode: string;
   dossierNumber: number;
+  totalDossiers: number;
+  isMonthly: boolean;
   isNew: boolean;
   records: number;
   folders: number;
@@ -156,6 +183,7 @@ export interface PlanBuild {
   importedCount: number;
   duplicateCount: number;
   weekendCount: number;
+  skippedBeforeStartCount: number;
   warnings: string[];
 }
 
@@ -163,104 +191,311 @@ export interface PlanBuild {
 const dupKey = (name: string, ship: number, start: string) => `${norm(name)}|${ship}|${start}`;
 
 /**
- * Groups rows into Sun→Thu weeks, one dossier per week, 6 dossiers per box.
- * Weeks that already exist in the store are reused; new weeks continue after the last dossier.
- * Weeks with no rows consume no dossier.
+ * Allocates rows starting from Month 6 at Box C13:
+ * - First 2 boxes (startBoxNumber = 13 -> C13, startBoxNumber + 1 = 14 -> C14):
+ *   - C13: Dossier 1 = Month 6 (June), Dossier 2 = Month 7 (July)
+ *   - C14: Dossier 1 = Month 8 (August), Dossier 2 = Month 9 (September)
+ * - From Box C15 onwards (Month 10+):
+ *   - Standard weekly allocation (Sun→Thu), 1 dossier per week, 6 dossiers per box.
  */
 export function buildMinutesPlan(
   rows: PlanRow[],
   existing: WorkspaceArchiveStore,
-  opts: { boxPrefix: string; startBoxNumber: number; fileName: string; userName: string; rejectedCount: number }
+  opts: { boxPrefix: string; startBoxNumber: number; fileName: string; userName: string; rejectedCount: number; uploadId?: string }
 ): PlanBuild {
   const now = new Date().toISOString();
+  const uploadId = opts.uploadId || `upl-${Date.now()}`;
   const boxes: Box[] = existing.boxes.map(b => ({ ...b }));
   const dossiers: Dossier[] = existing.dossiers.map(d => ({ ...d }));
   const projects: Project[] = [...existing.projects];
   const warnings: string[] = [];
 
+  const prefix = (opts.boxPrefix || 'C').trim().toUpperCase() || 'C';
+  const startNum = Math.max(1, opts.startBoxNumber || 13);
+  const m1BoxCode = `${prefix}${startNum}`;     // e.g. C13 (Months 6 & 7)
+  const m2BoxCode = `${prefix}${startNum + 1}`; // e.g. C14 (Months 8 & 9)
+  const weeklyMinBoxNum = startNum + 2;         // e.g. 15 -> C15+ (Month 10+)
+
+  const boxNum = (code: string) => parseInt(code.replace(/\D+/g, ''), 10) || 0;
+
+  // Determine the base year (prioritize existing dossiers, then earliest imported row in months 6+, then earliest row)
+  const sortedRows = [...rows].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.sourceRow - b.sourceRow);
+  const existingYears = dossiers
+    .map(d => Number((d.weekStart || '').slice(0, 4)))
+    .filter(y => Number.isFinite(y) && y > 1990);
+  const rowYearsFromJune = sortedRows
+    .filter(r => Number(r.startDate.slice(5, 7)) >= START_MONTH)
+    .map(r => Number(r.startDate.slice(0, 4)));
+  const allRowYears = sortedRows.map(r => Number(r.startDate.slice(0, 4))).filter(y => Number.isFinite(y) && y > 1990);
+  const baseYear =
+    (existingYears.length ? Math.min(...existingYears) : 0) ||
+    rowYearsFromJune[0] ||
+    allRowYears[0] ||
+    new Date().getFullYear();
+
+  const juneStartIso = monthStartOf(baseYear, START_MONTH); // YYYY-06-01
+  const octStartIso = monthStartOf(baseYear, 10);           // YYYY-10-01
+
+  const ensureBox = (code: string, totalDossiers: number): Box => {
+    let b = boxes.find(x => x.boxCode === code);
+    if (!b) {
+      b = {
+        id: code,
+        boxCode: code,
+        firstJobId: 0,
+        lastJobId: 0,
+        totalDossiers,
+        completedDossiers: 0,
+        totalProjects: 0,
+        archivedProjects: 0,
+        missingProjects: 0,
+        pendingProjects: 0,
+        status: 'Inprogress',
+        isForceClosed: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      boxes.push(b);
+    } else if (totalDossiers === MONTHLY_DOSSIERS_PER_BOX) {
+      b.totalDossiers = MONTHLY_DOSSIERS_PER_BOX;
+    }
+    return b;
+  };
+
   const seen = new Set(projects.map(p => dupKey(p.branchName || p.branchCode || '', p.shipmentNo ?? 0, p.startDate || '')));
   let nextJobId = projects.reduce((m, p) => Math.max(m, p.jobId), 0) + 1;
 
-  // 1) dedupe + bucket by week
-  const buckets = new Map<string, PlanRow[]>();
+  // 1) Dedupe, filter strictly >= Month 6 of baseYear, and partition into monthly (months 6..9) vs weekly (Oct+)
+  const monthlySlotMap: Record<number, { boxCode: string; dossierNumber: number; periodStart: string; periodEnd: string }> = {
+    6: { boxCode: m1BoxCode, dossierNumber: 1, periodStart: monthStartOf(baseYear, 6), periodEnd: monthEndOf(baseYear, 6) },
+    7: { boxCode: m1BoxCode, dossierNumber: 2, periodStart: monthStartOf(baseYear, 7), periodEnd: monthEndOf(baseYear, 7) },
+    8: { boxCode: m2BoxCode, dossierNumber: 1, periodStart: monthStartOf(baseYear, 8), periodEnd: monthEndOf(baseYear, 8) },
+    9: { boxCode: m2BoxCode, dossierNumber: 2, periodStart: monthStartOf(baseYear, 9), periodEnd: monthEndOf(baseYear, 9) },
+  };
+
+  const monthlyBuckets = new Map<number, PlanRow[]>(); // month 6|7|8|9 -> rows
+  const weeklyBuckets = new Map<string, { weekStart: string; weekEnd: string; rows: PlanRow[] }>();
   let duplicateCount = 0;
+  let skippedBeforeStartCount = 0;
   let weekendCount = 0;
-  const sorted = [...rows].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.sourceRow - b.sourceRow);
-  for (const r of sorted) {
+  let importedCount = 0;
+
+  for (const r of sortedRows) {
+    if (r.startDate < juneStartIso) {
+      skippedBeforeStartCount++;
+      continue;
+    }
     const k = dupKey(r.branchName, r.shipmentNo, r.startDate);
-    if (seen.has(k)) { duplicateCount++; continue; }
+    if (seen.has(k)) {
+      duplicateCount++;
+      continue;
+    }
     seen.add(k);
-    if (isWeekend(r.startDate)) weekendCount++;
-    const wk = weekStartOf(r.startDate);
-    if (!buckets.has(wk)) buckets.set(wk, []);
-    buckets.get(wk)!.push(r);
+    importedCount++;
+
+    const rYear = Number(r.startDate.slice(0, 4));
+    const rMonth = Number(r.startDate.slice(5, 7));
+
+    if (rYear === baseYear && rMonth >= 6 && rMonth <= 9) {
+      if (!monthlyBuckets.has(rMonth)) monthlyBuckets.set(rMonth, []);
+      monthlyBuckets.get(rMonth)!.push(r);
+    } else {
+      // Month 10+ (or subsequent years): weekly logic starting from Box C15+
+      if (isWeekend(r.startDate)) weekendCount++;
+      const rawWs = weekStartOf(r.startDate);
+      const rawWe = weekEndOf(rawWs);
+      // Keep Oct 1..3 partial week from crossing backward into September's monthly dossier
+      const wkStart = rawWs < octStartIso && r.startDate >= octStartIso ? octStartIso : rawWs;
+      const wkEnd = rawWe < wkStart ? wkStart : rawWe;
+      if (!weeklyBuckets.has(wkStart)) {
+        weeklyBuckets.set(wkStart, { weekStart: wkStart, weekEnd: wkEnd, rows: [] });
+      }
+      weeklyBuckets.get(wkStart)!.rows.push(r);
+    }
   }
 
-  // 2) locate / allocate dossier per week
-  const dossierByWeek = new Map<string, Dossier>();
-  dossiers.forEach(d => d.weekStart && dossierByWeek.set(d.weekStart, d));
-  const lastExistingWeek = [...dossierByWeek.keys()].sort().pop();
-
-  const boxNum = (code: string) => parseInt(code.replace(/\D+/g, ''), 10) || 0;
-  const orderedBoxes = () => [...boxes].sort((a, b) => boxNum(a.boxCode) - boxNum(b.boxCode));
-  const newWeeks = [...buckets.keys()].filter(w => !dossierByWeek.has(w)).sort();
-  if (lastExistingWeek && newWeeks.length && newWeeks[0] < lastExistingWeek) {
-    warnings.push(`أسابيع جديدة أقدم من آخر أسبوع مؤرشف (${lastExistingWeek}) — تم وضعها في آخر الدوسيهات المتاحة.`);
+  if (skippedBeforeStartCount > 0) {
+    warnings.push(
+      `تم تجاهل ${skippedBeforeStartCount} سجل بتاريخ قبل شهر 6 (${juneStartIso}) لأن الترقيم يبدأ من شهر 6 في بوكس ${m1BoxCode}.`
+    );
   }
 
   const previews: PlanWeekPreview[] = [];
   const touchedBoxes = new Set<string>();
+
+  // 2A) Allocate & populate monthly dossiers for C13 (months 6,7) and C14 (months 8,9)
+  for (const monthNum of [6, 7, 8, 9]) {
+    const list = monthlyBuckets.get(monthNum);
+    if (!list || list.length === 0) continue;
+
+    const spec = monthlySlotMap[monthNum];
+    ensureBox(spec.boxCode, MONTHLY_DOSSIERS_PER_BOX);
+
+    let dossier = dossiers.find(d => d.boxId === spec.boxCode && d.dossierNumber === spec.dossierNumber);
+    const isNew = !dossier;
+    if (!dossier) {
+      dossier = {
+        id: `${spec.boxCode}-${spec.dossierNumber}`,
+        boxId: spec.boxCode,
+        dossierNumber: spec.dossierNumber,
+        fromJobId: 0,
+        toJobId: 0,
+        totalProjects: 0,
+        archivedCount: 0,
+        missingCount: 0,
+        pendingCount: 0,
+        status: 'Pending',
+        weekStart: spec.periodStart,
+        weekEnd: spec.periodEnd,
+      };
+      dossiers.push(dossier);
+    }
+
+    let slot = projects.filter(p => p.boxId === dossier!.boxId && p.dossierNumber === dossier!.dossierNumber).length;
+    let folders = 0;
+    for (const r of list) {
+      const rowStatus = r.status || 'Pending';
+      projects.push({
+        jobId: nextJobId++,
+        dateApproved: r.startDate,
+        status: rowStatus,
+        boxId: dossier.boxId,
+        dossierNumber: dossier.dossierNumber,
+        slotIndex: slot++,
+        firstImportDate: now,
+        lastUpdateDate: now,
+        sourceUpload: opts.fileName,
+        uploadId,
+        statusHistory: [{ status: rowStatus, timestamp: now, note: 'Imported from plan', user: opts.userName }],
+        branchName: r.branchName,
+        branchCode: r.branchCode,
+        shipmentNo: r.shipmentNo,
+        folderCount: r.folderCount,
+        region: r.region,
+        wing: r.wing,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        weekStart: spec.periodStart,
+      });
+      folders += r.folderCount;
+    }
+
+    touchedBoxes.add(dossier.boxId);
+    previews.push({
+      weekStart: spec.periodStart,
+      weekEnd: spec.periodEnd,
+      boxCode: dossier.boxId,
+      dossierNumber: dossier.dossierNumber,
+      totalDossiers: MONTHLY_DOSSIERS_PER_BOX,
+      isMonthly: true,
+      isNew,
+      records: list.length,
+      folders,
+    });
+  }
+
+  // 2B) Locate / allocate weekly dossiers strictly inside boxes >= weeklyMinBoxNum (C15+)
+  const dossierByWeek = new Map<string, Dossier>();
+  dossiers
+    .filter(d => boxNum(d.boxId) >= weeklyMinBoxNum && d.weekStart)
+    .forEach(d => dossierByWeek.set(d.weekStart!, d));
+
+  const lastExistingWeek = [...dossierByWeek.keys()].sort().pop();
+  const orderedWeeklyBoxes = () =>
+    boxes.filter(b => boxNum(b.boxCode) >= weeklyMinBoxNum).sort((a, b) => boxNum(a.boxCode) - boxNum(b.boxCode));
+
+  const newWeeks = [...weeklyBuckets.keys()].filter(w => !dossierByWeek.has(w)).sort();
+  if (lastExistingWeek && newWeeks.length && newWeeks[0] < lastExistingWeek) {
+    warnings.push(`أسابيع جديدة أقدم من آخر أسبوع مؤرشف (${lastExistingWeek}) — تم وضعها في آخر الدوسيهات المتاحة.`);
+  }
+
   for (const wk of newWeeks) {
-    const lastBox = orderedBoxes().pop();
-    const used = lastBox ? dossiers.filter(d => d.boxId === lastBox.boxCode).length : DOSSIERS_PER_BOX;
+    const bucket = weeklyBuckets.get(wk)!;
+    const lastWeeklyBox = orderedWeeklyBoxes().pop();
+    const used = lastWeeklyBox ? dossiers.filter(d => d.boxId === lastWeeklyBox.boxCode).length : DOSSIERS_PER_BOX;
     let boxCode: string;
     let dnum: number;
-    if (lastBox && used < DOSSIERS_PER_BOX) {
-      boxCode = lastBox.boxCode;
+
+    if (lastWeeklyBox && used < DOSSIERS_PER_BOX) {
+      boxCode = lastWeeklyBox.boxCode;
       dnum = used + 1;
     } else {
-      const n = lastBox ? boxNum(lastBox.boxCode) + 1 : opts.startBoxNumber;
-      boxCode = `${opts.boxPrefix}${n}`;
+      const nextNum = lastWeeklyBox ? boxNum(lastWeeklyBox.boxCode) + 1 : weeklyMinBoxNum;
+      boxCode = `${prefix}${nextNum}`;
       dnum = 1;
-      boxes.push({
-        id: boxCode, boxCode, firstJobId: 0, lastJobId: 0, totalDossiers: DOSSIERS_PER_BOX, completedDossiers: 0,
-        totalProjects: 0, archivedProjects: 0, missingProjects: 0, pendingProjects: 0,
-        status: 'Inprogress', isForceClosed: false, createdAt: now, updatedAt: now,
-      });
+      ensureBox(boxCode, DOSSIERS_PER_BOX);
     }
+
     const d: Dossier = {
-      id: `${boxCode}-${dnum}`, boxId: boxCode, dossierNumber: dnum, fromJobId: 0, toJobId: 0, totalProjects: 0,
-      archivedCount: 0, missingCount: 0, pendingCount: 0, status: 'Pending', weekStart: wk, weekEnd: weekEndOf(wk),
+      id: `${boxCode}-${dnum}`,
+      boxId: boxCode,
+      dossierNumber: dnum,
+      fromJobId: 0,
+      toJobId: 0,
+      totalProjects: 0,
+      archivedCount: 0,
+      missingCount: 0,
+      pendingCount: 0,
+      status: 'Pending',
+      weekStart: bucket.weekStart,
+      weekEnd: bucket.weekEnd,
     };
     dossiers.push(d);
     dossierByWeek.set(wk, d);
   }
 
-  // 3) create records inside their week's dossier
-  for (const wk of [...buckets.keys()].sort()) {
+  // 3) Populate weekly dossiers
+  for (const wk of [...weeklyBuckets.keys()].sort()) {
+    const bucket = weeklyBuckets.get(wk)!;
     const d = dossierByWeek.get(wk)!;
     let slot = projects.filter(p => p.boxId === d.boxId && p.dossierNumber === d.dossierNumber).length;
     let folders = 0;
-    const list = buckets.get(wk)!;
-    for (const r of list) {
+
+    for (const r of bucket.rows) {
       const rowStatus = r.status || 'Pending';
       projects.push({
-        jobId: nextJobId++, dateApproved: r.startDate, status: rowStatus, boxId: d.boxId, dossierNumber: d.dossierNumber,
-        slotIndex: slot++, firstImportDate: now, lastUpdateDate: now, sourceUpload: opts.fileName,
+        jobId: nextJobId++,
+        dateApproved: r.startDate,
+        status: rowStatus,
+        boxId: d.boxId,
+        dossierNumber: d.dossierNumber,
+        slotIndex: slot++,
+        firstImportDate: now,
+        lastUpdateDate: now,
+        sourceUpload: opts.fileName,
+        uploadId,
         statusHistory: [{ status: rowStatus, timestamp: now, note: 'Imported from plan', user: opts.userName }],
-        branchName: r.branchName, branchCode: r.branchCode, shipmentNo: r.shipmentNo, folderCount: r.folderCount,
-        region: r.region, wing: r.wing, startDate: r.startDate, endDate: r.endDate, weekStart: wk,
+        branchName: r.branchName,
+        branchCode: r.branchCode,
+        shipmentNo: r.shipmentNo,
+        folderCount: r.folderCount,
+        region: r.region,
+        wing: r.wing,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        weekStart: wk,
       });
       folders += r.folderCount;
     }
+
     touchedBoxes.add(d.boxId);
     previews.push({
-      weekStart: wk, weekEnd: weekEndOf(wk), boxCode: d.boxId, dossierNumber: d.dossierNumber,
-      isNew: newWeeks.includes(wk), records: list.length, folders,
+      weekStart: bucket.weekStart,
+      weekEnd: bucket.weekEnd,
+      boxCode: d.boxId,
+      dossierNumber: d.dossierNumber,
+      totalDossiers: DOSSIERS_PER_BOX,
+      isMonthly: false,
+      isNew: newWeeks.includes(wk),
+      records: bucket.rows.length,
+      folders,
     });
   }
 
-  // 4) recompute counters / job ranges for every dossier + box
+  // Sort previews cleanly by box number then dossier number
+  previews.sort((a, b) => boxNum(a.boxCode) - boxNum(b.boxCode) || a.dossierNumber - b.dossierNumber);
+
+  // 4) Recompute counters / job ranges for every dossier + box
   for (const d of dossiers) {
     const ps = projects.filter(p => p.boxId === d.boxId && p.dossierNumber === d.dossierNumber);
     d.totalProjects = ps.length;
@@ -271,6 +506,7 @@ export function buildMinutesPlan(
     d.toJobId = ps.length ? Math.max(...ps.map(p => p.jobId)) : 0;
     d.status = ps.length && d.archivedCount === ps.length ? 'Archived' : d.archivedCount + d.missingCount > 0 ? 'Inprogress' : 'Pending';
   }
+
   for (const b of boxes) {
     const ds = dossiers.filter(d => d.boxId === b.boxCode);
     const ps = projects.filter(p => p.boxId === b.boxCode);
@@ -285,15 +521,30 @@ export function buildMinutesPlan(
     if (touchedBoxes.has(b.boxCode)) b.updatedAt = now;
   }
 
-  const importedCount = rows.length - duplicateCount;
   const upload: UploadRecord = {
-    id: `upl-${Date.now()}`, fileName: opts.fileName, userName: opts.userName, timestamp: now,
-    totalRows: rows.length + opts.rejectedCount, importedCount, duplicateCount, rejectedCount: opts.rejectedCount,
-    errors: warnings, status: duplicateCount || opts.rejectedCount || warnings.length ? 'Completed with warnings' : 'Completed',
+    id: uploadId,
+    fileName: opts.fileName,
+    userName: opts.userName,
+    timestamp: now,
+    totalRows: rows.length + opts.rejectedCount,
+    importedCount,
+    duplicateCount,
+    rejectedCount: opts.rejectedCount + skippedBeforeStartCount,
+    errors: warnings,
+    status:
+      duplicateCount || opts.rejectedCount || skippedBeforeStartCount || warnings.length
+        ? 'Completed with warnings'
+        : 'Completed',
   };
 
   return {
     store: { ...existing, boxes, dossiers, projects, uploadHistory: [upload, ...existing.uploadHistory] },
-    weeks: previews, importedCount, duplicateCount, weekendCount, warnings,
+    weeks: previews,
+    importedCount,
+    duplicateCount,
+    weekendCount,
+    skippedBeforeStartCount,
+    warnings,
   };
 }
+

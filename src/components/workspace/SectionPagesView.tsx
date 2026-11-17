@@ -8,11 +8,14 @@ import {
   FileBarChart,
   FileDown,
   FileSpreadsheet,
+  Filter,
   FolderArchive,
   Layers,
   Plus,
   Printer,
+  RotateCcw,
   Search,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -20,6 +23,8 @@ import { useArchive } from '../../context/ArchiveContext';
 import { ActiveTab } from '../navigation/TopNav';
 import { MinutesPlanImport } from './MinutesPlanImport';
 import { MinutesArchiveViews } from './MinutesArchiveViews';
+import { PalletHandoverViews } from './PalletHandoverViews';
+import { DeleteUploadModal } from '../common/DeleteUploadModal';
 import logoColor from '../../assets/logo.png';
 import armsLogoLight from '../../assets/arms-logo.png';
 
@@ -46,11 +51,22 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   onSelectBox,
   onSelectDossier,
 }) => {
-  const { currentUser, language, minutesArchive } = useArchive();
+  const { currentUser, language, minutesArchive, palletArchive, palletReports } = useArchive();
   const isAr = language === 'ar';
   const DirectionalArrow = isAr ? ArrowLeft : ArrowRight;
+  const isSystemAdmin = currentUser.role === 'System Admin';
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [targetUploadId, setTargetUploadId] = useState<string | null>(null);
 
   const isPallet = workspace === 'pallet-archive';
+  const hasPalletData =
+    palletArchive.boxes.length > 0 ||
+    palletArchive.projects.length > 0 ||
+    palletArchive.uploadHistory.length > 0 ||
+    palletReports.length > 0;
+  const palletTotalBoxes = palletReports.reduce((sum, row) => sum + (row.boxesCount || row.boxCount || 0), 0);
+  const palletOverCapacity = new Set(palletReports.filter(row => row.capacityStatus === 'over-capacity').map(row => `${row.palletCode}|${row.deliveryDate || row.inspectionDate}`)).size;
+  const palletMonths = new Set(palletReports.map(row => row.archiveMonth || row.deliveryDate?.slice(0, 7) || row.inspectionDate?.slice(0, 7)).filter(Boolean)).size;
 
   if (!isPallet) {
     return (
@@ -65,6 +81,13 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         onSelectDossier={id => onSelectDossier?.(id)}
       />
     );
+  }
+
+  if (isPallet && activeTab === 'import') {
+    return <PalletHandoverViews mode="import" onNavigate={onNavigate} />;
+  }
+  if (isPallet && activeTab === 'archive') {
+    return <PalletHandoverViews mode="archive" onNavigate={onNavigate} />;
   }
 
   const theme = isPallet
@@ -116,6 +139,8 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived' | 'pending'>('all');
   const [selectedReportTab, setSelectedReportTab] = useState<'summary' | 'records' | 'audit'>('summary');
+  const [reportBoxFilter, setReportBoxFilter] = useState<string>('all');
+  const [reportSearch, setReportSearch] = useState('');
   const [labelPreviewCode, setLabelPreviewCode] = useState(isPallet ? 'PLT-001' : 'MIN-001');
 
   const emptyPieData = [{ name: isAr ? 'فارغ' : 'Empty', value: 1, color: '#E2E8F0' }];
@@ -160,9 +185,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
               {isAr ? 'لوحة المتابعة والتحكم' : 'Workspace Dashboard'}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {theme.sectionSubtitle}
-            </p>
           </div>
 
           <button
@@ -203,10 +225,10 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <ArrowUpRight className={`w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity ${theme.accentText}`} />
               </div>
               <div className="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tabular-nums">
-                0
+                {isPallet ? palletReports.length.toLocaleString() : 0}
               </div>
               <div className="mt-1 text-[11px] text-slate-400">
-                {isAr ? 'جاهز لاستقبال البيانات' : 'Ready for records'}
+                {isPallet ? `${palletTotalBoxes.toLocaleString()} ${isAr ? 'بوكس' : 'boxes'}` : (isAr ? 'جاهز لاستقبال البيانات' : 'Ready for records')}
               </div>
             </button>
 
@@ -220,10 +242,10 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <CheckCircle2 className="w-3.5 h-3.5" />
               </div>
               <div className={`mt-2 text-2xl sm:text-3xl font-extrabold tabular-nums ${theme.accentText}`}>
-                0
+                {isPallet ? palletReports.filter(row => row.archived !== false).length.toLocaleString() : 0}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                0.0% {isAr ? 'من الإجمالي' : 'completed'}
+                {isPallet && palletReports.length ? '100%' : '0.0%'} {isAr ? 'من الإجمالي' : 'completed'}
               </div>
             </button>
 
@@ -237,10 +259,10 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <Clock className="w-3.5 h-3.5" />
               </div>
               <div className="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tabular-nums">
-                0
+                {isPallet ? palletOverCapacity.toLocaleString() : 0}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                0 {isAr ? 'بانتظار الاعتماد' : 'pending'}
+                {isPallet ? (isAr ? 'باليت تجاوزت 36 بوكس' : 'pallets over 36 boxes') : (isAr ? 'بانتظار الاعتماد' : 'pending')}
               </div>
             </button>
 
@@ -254,10 +276,10 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <FileBarChart className={`w-3.5 h-3.5 ${theme.accentText}`} />
               </div>
               <div className="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tabular-nums">
-                0
+                {isPallet ? palletMonths.toLocaleString() : 0}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                {isAr ? 'تصدير PDF · Excel' : 'PDF · Excel ready'}
+                {isAr ? 'دوسيهات شهرية' : 'Monthly folders'}
               </div>
             </button>
           </div>
@@ -271,11 +293,11 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             </div>
 
             <div className="flex-1 bg-slate-200 dark:bg-neutral-800/80 rounded-full h-2 overflow-hidden flex">
-              <div className={`${theme.accentBgSolid} h-full`} style={{ width: '0%' }} />
+              <div className={`${theme.accentBgSolid} h-full`} style={{ width: isPallet && palletReports.length ? '100%' : '0%' }} />
             </div>
 
             <span className={`text-xs font-extrabold tabular-nums shrink-0 ${theme.accentText}`}>
-              0.0%
+              {isPallet && palletReports.length ? '100.0%' : '0.0%'}
             </span>
           </div>
         </section>
@@ -448,12 +470,23 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
               <FolderArchive className={`w-6 h-6 ${theme.accentText}`} />
               <span>{theme.archiveTitle}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {theme.archiveSubtitle}
-            </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {isSystemAdmin && hasPalletData && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetUploadId(null);
+                  setDeleteModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#E52225] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 hover:bg-[#E52225] hover:text-white rounded-lg transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isAr ? 'مسح رفعة / بيانات' : 'Delete Upload / Data'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => onNavigate('import')}
@@ -473,6 +506,16 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             </button>
           </div>
         </div>
+
+        <DeleteUploadModal
+          isOpen={deleteModalOpen}
+          scope="pallet"
+          initialUploadId={targetUploadId}
+          onClose={() => {
+            setDeleteModalOpen(false);
+            setTargetUploadId(null);
+          }}
+        />
 
         {/* Filters & Search */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white dark:bg-[#111111] p-3 rounded-xl border border-slate-200 dark:border-neutral-800">
@@ -558,27 +601,55 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   /* -------------------- 3. REPORTS VIEW -------------------- */
   if (activeTab === 'reports') {
     const reportTemplates = [
-      { id: 'summary' as const, label: isAr ? '1. الملخص العام للقسم' : '1. Section Summary' },
-      { id: 'records' as const, label: isAr ? '2. سجل البيانات المؤرشفة' : '2. Archived Records Log' },
-      { id: 'audit' as const, label: isAr ? '3. تقرير المراجعة والاعتماد' : '3. Review & Approval Report' },
+      { id: 'summary' as const, label: isAr ? 'الملخص العام للقسم' : 'Section Summary', titleEn: 'Pallet Section Summary' },
+      { id: 'records' as const, label: isAr ? 'سجل البيانات المؤرشفة' : 'Archived Records Log', titleEn: 'Pallet Archived Records Log' },
+      { id: 'audit' as const, label: isAr ? 'تقرير المراجعة والاعتماد' : 'Review & Approval Report', titleEn: 'Pallet Review & Approval Report' },
     ];
 
-    const activeReportLabel = reportTemplates.find(r => r.id === selectedReportTab)?.label || '';
+    const activeTemplate = reportTemplates.find(r => r.id === selectedReportTab) || reportTemplates[0];
+    const palletBoxes = [...palletArchive.boxes].sort((a, b) => a.boxCode.localeCompare(b.boxCode));
+    const reportQuery = reportSearch.trim().toLowerCase();
+
+    const filteredPalletProjects = palletArchive.projects.filter(p => {
+      if (reportBoxFilter !== 'all' && p.boxId !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      return (
+        String(p.jobId).toLowerCase().includes(reportQuery) ||
+        (p.boxId || '').toLowerCase().includes(reportQuery) ||
+        (p.branchName || '').toLowerCase().includes(reportQuery) ||
+        (p.status || '').toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const filteredPalletBoxes = palletBoxes.filter(b => {
+      if (reportBoxFilter !== 'all' && b.boxCode !== reportBoxFilter) return false;
+      if (!reportQuery) return true;
+      return (
+        b.boxCode.toLowerCase().includes(reportQuery) ||
+        b.status.toLowerCase().includes(reportQuery)
+      );
+    });
+
+    const scopeLabel = reportBoxFilter === 'all' ? 'All Boxes' : `Box ${reportBoxFilter}`;
+    const totalSummaryDisplay = `${filteredPalletProjects.length} Records · ${filteredPalletBoxes.length} Boxes`;
+    const formattedPrintDate = new Date().toLocaleString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800 print:hidden">
           <div>
             <div className={`text-[11px] font-bold mb-0.5 ${theme.accentText}`}>{theme.sectionTitle}</div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <FileBarChart className={`w-6 h-6 ${theme.accentText}`} />
               <span>{theme.reportsTitle}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'معاينة وتصدير تقارير القسم بصيغة A4 احترافية.'
-                : 'Formal A4 report layout exportable to Excel, PDF, and direct Print.'}
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -610,47 +681,129 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <aside className="lg:col-span-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-2">
-            <div className="px-2.5 pb-1 text-[11px] font-bold text-slate-400 dark:text-neutral-500 border-b border-slate-100 dark:border-neutral-800">
-              {isAr ? 'قوالب تقارير القسم' : 'Section Reports'}
+          <aside className="lg:col-span-4 space-y-3 print:hidden">
+            <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-2">
+              <label
+                htmlFor="pallet-report-select"
+                className="block text-[11px] font-bold text-slate-500 dark:text-neutral-400"
+              >
+                {isAr ? 'اختيار التقرير' : 'Select Report'}
+              </label>
+              <select
+                id="pallet-report-select"
+                value={selectedReportTab}
+                onChange={e => setSelectedReportTab(e.target.value as typeof selectedReportTab)}
+                className={`w-full px-3 py-2 text-xs font-semibold bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-100 focus:outline-none ${theme.accentBorderFocus}`}
+              >
+                {reportTemplates.map(tpl => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.label}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div className="space-y-1 pt-1">
-              {reportTemplates.map(tpl => (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => setSelectedReportTab(tpl.id)}
-                  className={`w-full text-start px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    selectedReportTab === tpl.id
-                      ? `${theme.accentBgSolid} text-white font-bold shadow-xs`
-                      : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-                  }`}
+
+            <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-500 dark:text-neutral-400 flex items-center gap-1.5">
+                  <Filter className={`w-3.5 h-3.5 ${theme.accentText}`} />
+                  <span>{isAr ? 'تصفية التقرير' : 'Filter Report'}</span>
+                </span>
+                {(reportBoxFilter !== 'all' || reportSearch) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportBoxFilter('all');
+                      setReportSearch('');
+                    }}
+                    className={`text-[11px] font-semibold hover:underline flex items-center gap-1 ${theme.accentText}`}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>{isAr ? 'إعادة ضبط' : 'Reset'}</span>
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                  {isAr ? 'البوكس' : 'Box'}
+                </label>
+                <select
+                  value={reportBoxFilter}
+                  onChange={e => setReportBoxFilter(e.target.value)}
+                  className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none ${theme.accentBorderFocus}`}
                 >
-                  {tpl.label}
-                </button>
-              ))}
+                  <option value="all">
+                    {isAr ? `كل البوكسات (${palletBoxes.length})` : `All Boxes (${palletBoxes.length})`}
+                  </option>
+                  {palletBoxes.map(b => (
+                    <option key={b.id} value={b.boxCode}>
+                      {b.boxCode}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                  {isAr ? 'بحث سريع' : 'Quick Search'}
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={reportSearch}
+                    onChange={e => setReportSearch(e.target.value)}
+                    placeholder={isAr ? 'بوكس، باليت، مرجع، حالة...' : 'Box, pallet, reference, status...'}
+                    className={`w-full ps-8 pe-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none ${theme.accentBorderFocus}`}
+                  />
+                </div>
+              </div>
             </div>
           </aside>
 
           <div className="lg:col-span-8 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-neutral-800">
-              <h2 className="text-sm font-bold text-slate-800 dark:text-white">{activeReportLabel}</h2>
-              <span className="text-xs text-slate-400 tabular-nums">0 {isAr ? 'سجل' : 'records'}</span>
+              <h2 className="text-sm font-bold text-slate-800 dark:text-white">{activeTemplate.label}</h2>
+              <span className="text-xs text-slate-400 tabular-nums">
+                {filteredPalletProjects.length} {isAr ? 'سجل' : 'records'}
+              </span>
             </div>
 
             <div className="bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5">
-              <div dir="ltr" className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-4">
+              <div dir="ltr" className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-3.5">
                 <div className="flex items-center justify-between gap-4 pb-1">
-                  <img src={logoColor} alt="Intercom" className="h-7 w-auto object-contain" />
-                  <h3 className="text-base font-bold text-slate-900 text-center">
-                    {isPallet ? 'Pallet Handover Report' : 'Comments Archive Report'}
+                  <img src={logoColor} alt="Intercom" className="h-7 sm:h-8 w-auto object-contain" />
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight text-center min-w-0 leading-snug">
+                    {activeTemplate.titleEn}
                   </h3>
-                  <img src={armsLogoLight} alt="ARMS" className="h-7 w-auto object-contain" />
+                  <img src={armsLogoLight} alt="ARMS" className="h-7 sm:h-9 w-auto object-contain" />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5">
-                  <div><span className="font-bold text-slate-600">Section :</span> {isPallet ? 'Pallet Archive' : 'Comments Archive'}</div>
-                  <div><span className="font-bold text-slate-600">Prepared By :</span> {currentUser?.name || 'Admin'}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-600 shrink-0">Scope :</span>
+                      <span className="font-semibold text-slate-900">{scopeLabel}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-600 shrink-0">Total :</span>
+                      <span className="font-semibold text-slate-900 tabular-nums">{totalSummaryDisplay}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-600 shrink-0">Print Date :</span>
+                      <span className="text-slate-900 tabular-nums">{formattedPrintDate}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-600 shrink-0">Prepared By :</span>
+                      <span className="font-semibold text-slate-900 truncate">
+                        {currentUser?.name || 'System Admin'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="border-b-2 border-slate-700" />
@@ -660,17 +813,29 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                     <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
                       <th className="border border-slate-400 px-2 py-1.5 w-9 text-center">#</th>
                       <th className="border border-slate-400 px-2.5 py-1.5">Reference</th>
-                      <th className="border border-slate-400 px-2.5 py-1.5">Details</th>
+                      <th className="border border-slate-400 px-2.5 py-1.5">Box</th>
                       <th className="border border-slate-400 px-2.5 py-1.5">Date</th>
                       <th className="border border-slate-400 px-2.5 py-1.5">Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td colSpan={5} className="border border-slate-300 py-10 text-center text-slate-500">
-                        No records added yet
-                      </td>
-                    </tr>
+                    {filteredPalletProjects.length > 0 ? (
+                      filteredPalletProjects.slice(0, 50).map((p, idx) => (
+                        <tr key={p.jobId}>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
+                          <td className="border border-slate-300 px-2.5 py-1.5 font-semibold">{p.branchName || `#${p.jobId}`}</td>
+                          <td className="border border-slate-300 px-2.5 py-1.5 font-mono">{p.boxId}</td>
+                          <td className="border border-slate-300 px-2.5 py-1.5 tabular-nums">{p.dateApproved || p.startDate || '—'}</td>
+                          <td className="border border-slate-300 px-2.5 py-1.5">{p.status}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="border border-slate-300 py-10 text-center text-slate-500">
+                          No records added yet
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
 
@@ -697,11 +862,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
               <Printer className={`w-6 h-6 ${theme.accentText}`} />
               <span>{theme.labelsTitle}</span>
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-              {isAr
-                ? 'تصميم وطباعة الليبلات الحرارية الخاصة بالقسم بمقاس 100 × 50 مم.'
-                : 'Thermal 100 × 50 mm label template workspace.'}
-            </p>
           </div>
 
           <button
@@ -730,11 +890,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 className={`w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:ring-1 ${theme.accentBorderFocus}`}
               />
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              {isAr
-                ? 'سيتم ربط حقول الليبل تلقائياً ببيانات القسم فور تحديدها.'
-                : 'Label fields will bind directly to section records once configured.'}
-            </p>
           </div>
 
           <div className="lg:col-span-8 bg-slate-100/80 dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-6 sm:p-10 flex items-center justify-center">
@@ -775,13 +930,32 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             <FileSpreadsheet className={`w-6 h-6 ${theme.accentText}`} />
             <span>{theme.importTitle}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {isAr
-              ? 'رفع ومعاينة ملفات Excel الخاصة بالقسم.'
-              : 'Upload and preview Excel spreadsheets for this workspace.'}
-          </p>
         </div>
+
+        {isSystemAdmin && hasPalletData && (
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUploadId(null);
+              setDeleteModalOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#E52225] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 hover:bg-[#E52225] hover:text-white rounded-lg transition-colors shrink-0 self-start sm:self-auto"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{isAr ? 'مسح رفعة / بيانات' : 'Delete Upload / Data'}</span>
+          </button>
+        )}
       </div>
+
+      <DeleteUploadModal
+        isOpen={deleteModalOpen}
+        scope="pallet"
+        initialUploadId={targetUploadId}
+        onClose={() => {
+          setDeleteModalOpen(false);
+          setTargetUploadId(null);
+        }}
+      />
 
       {!isPallet ? <MinutesPlanImport /> : (
       <div className={`bg-white dark:bg-[#111111] border-2 border-dashed border-slate-300 dark:border-neutral-800 rounded-xl p-10 text-center space-y-3 transition-colors ${theme.accentBorderHover}`}>
@@ -803,9 +977,54 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-neutral-800 text-sm font-bold text-slate-900 dark:text-white">
           {isAr ? 'سجل عمليات الرفع' : 'Upload History'}
         </div>
-        <div className="py-10 text-center text-xs text-slate-400">
-          {isAr ? 'لا توجد عمليات رفع مسجلة حتى الآن' : 'No uploads recorded yet'}
-        </div>
+        {palletArchive.uploadHistory.length === 0 ? (
+          <div className="py-10 text-center text-xs text-slate-400">
+            {isAr ? 'لا توجد عمليات رفع مسجلة حتى الآن' : 'No uploads recorded yet'}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-slate-50 dark:bg-neutral-900/70 text-slate-500 text-[11px] font-semibold border-b border-slate-100 dark:border-neutral-800">
+                <tr>
+                  <th className="px-5 py-2.5 text-start">{isAr ? 'الملف' : 'File Name'}</th>
+                  <th className="px-3 py-2.5 text-start">{isAr ? 'المستخدم' : 'User'}</th>
+                  <th className="px-3 py-2.5 text-start">{isAr ? 'التاريخ' : 'Date'}</th>
+                  <th className="px-3 py-2.5 text-end">{isAr ? 'المستورد' : 'Imported'}</th>
+                  <th className="px-5 py-2.5 text-end">{isAr ? 'الحالة' : 'Status'}</th>
+                  {isSystemAdmin && (
+                    <th className="px-3 py-2.5 text-center">{isAr ? 'إجراء' : 'Action'}</th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {palletArchive.uploadHistory.map(u => (
+                  <tr key={u.id} className="border-b border-slate-50 dark:border-neutral-900">
+                    <td className="px-5 py-2.5 font-semibold text-slate-900 dark:text-white">{u.fileName}</td>
+                    <td className="px-3 py-2.5 text-slate-500">{u.userName}</td>
+                    <td className="px-3 py-2.5 text-slate-500 tabular-nums">{u.timestamp}</td>
+                    <td className="px-3 py-2.5 text-end font-bold tabular-nums">{u.importedCount}</td>
+                    <td className="px-5 py-2.5 text-end text-emerald-600 font-semibold">{u.status}</td>
+                    {isSystemAdmin && (
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetUploadId(u.id);
+                            setDeleteModalOpen(true);
+                          }}
+                          title={isAr ? 'مسح هذه الرفعة' : 'Delete this upload'}
+                          className="p-1.5 text-[#E52225] hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

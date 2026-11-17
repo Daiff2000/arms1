@@ -35,6 +35,7 @@ export interface Project {
   firstImportDate: string;
   lastUpdateDate: string;
   sourceUpload: string;
+  uploadId?: string;
   statusHistory: StatusHistoryEntry[];
   // Comments & Minutes plan fields (optional — only set for plan imports)
   branchName?: string;
@@ -181,6 +182,19 @@ export interface PalletReport {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  // Pallet delivery archive fields (optional for compatibility with older pallet records)
+  jobCode?: string;
+  deliveryDate?: string;
+  boxesCount?: number;
+  deliveredBy?: string;
+  deliveryStatus?: string;
+  archiveMonth?: string;
+  capacityStatus?: 'normal' | 'over-capacity';
+  palletTotalBoxes?: number;
+  sourceSheet?: string;
+  sourceRow?: number;
+  uploadId?: string;
+  archived?: boolean;
 }
 
 export type MinutesCategory =

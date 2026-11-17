@@ -350,16 +350,100 @@ const addDaysIso = (isoDate: string, days: number): string => {
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 };
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const monthBoundsIso = (year: number, month1to12: number): { start: string; end: string } => {
+  const normDate = new Date(Date.UTC(year, month1to12 - 1, 1));
+  const y = normDate.getUTCFullYear();
+  const m = normDate.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return {
+    start: `${y}-${pad2(m)}-01`,
+    end: `${y}-${pad2(m)}-${pad2(lastDay)}`,
+  };
+};
+
 /**
- * Helper to build a 7-label package for a weekly box (C-series), formatting FROM/TO as DD/MM/YY.
+ * Helper to build a label package for a Comments Archive box (C-series), formatting FROM/TO as DD/MM/YY.
+ * - Monthly boxes (e.g. C13, C14 with totalDossiers = 2): 1 Box + 2 monthly Dossiers (3 pages).
+ * - Weekly boxes (e.g. C15+ with totalDossiers = 6): 1 Box + 6 weekly Dossiers (7 pages).
  */
 export function buildWeeklyBoxLabelPackage(
   boxCode: string,
   boxDossiers: Dossier[],
-  fallbackWeek1Start?: string
+  fallbackWeek1Start?: string,
+  totalDossiersOverride?: number
 ): LabelData[] {
   const sorted = [...boxDossiers].sort((a, b) => a.dossierNumber - b.dossierNumber);
   const todayIso = new Date().toISOString().slice(0, 10);
+  const currentYear = new Date().getFullYear();
+
+  const isKnownMonthlyCode = /^C1[34]$/i.test(boxCode.trim());
+  const targetTotalDossiers =
+    totalDossiersOverride === 2 || (totalDossiersOverride == null && isKnownMonthlyCode && sorted.length <= 2)
+      ? 2
+      : 6;
+
+  if (targetTotalDossiers === 2) {
+    const d1Existing = sorted.find(x => x.dossierNumber === 1);
+    const d2Existing = sorted.find(x => x.dossierNumber === 2);
+
+    let baseYear = currentYear;
+    let firstMonth = /^C14$/i.test(boxCode.trim()) ? 8 : 6;
+
+    if (d1Existing?.weekStart) {
+      baseYear = Number(d1Existing.weekStart.slice(0, 4)) || currentYear;
+      firstMonth = Number(d1Existing.weekStart.slice(5, 7)) || firstMonth;
+    } else if (d2Existing?.weekStart) {
+      baseYear = Number(d2Existing.weekStart.slice(0, 4)) || currentYear;
+      firstMonth = Math.max(1, (Number(d2Existing.weekStart.slice(5, 7)) || firstMonth + 1) - 1);
+    } else if (fallbackWeek1Start) {
+      baseYear = Number(fallbackWeek1Start.slice(0, 4)) || currentYear;
+      firstMonth = Number(fallbackWeek1Start.slice(5, 7)) || firstMonth;
+    }
+
+    const m1 = monthBoundsIso(baseYear, firstMonth);
+    const m2 = monthBoundsIso(baseYear, firstMonth + 1);
+
+    const d1Start = d1Existing?.weekStart || m1.start;
+    const d1End = d1Existing?.weekEnd || m1.end;
+    const d2Start = d2Existing?.weekStart || m2.start;
+    const d2End = d2Existing?.weekEnd || m2.end;
+
+    const dossierLabels: LabelData[] = [
+      {
+        type: 'dossier',
+        boxCode,
+        dossierNumber: 1,
+        totalDossiers: 2,
+        fromJobId: d1Existing?.fromJobId || 1,
+        toJobId: d1Existing?.toJobId || 1,
+        fromLabel: formatShortLabelDate(d1Start),
+        toLabel: formatShortLabelDate(d1End),
+      },
+      {
+        type: 'dossier',
+        boxCode,
+        dossierNumber: 2,
+        totalDossiers: 2,
+        fromJobId: d2Existing?.fromJobId || 2,
+        toJobId: d2Existing?.toJobId || 2,
+        fromLabel: formatShortLabelDate(d2Start),
+        toLabel: formatShortLabelDate(d2End),
+      },
+    ];
+
+    const boxLabel: LabelData = {
+      type: 'box',
+      boxCode,
+      fromJobId: sorted[0]?.fromJobId || 1,
+      toJobId: sorted[sorted.length - 1]?.toJobId || 2,
+      fromLabel: formatShortLabelDate(d1Start),
+      toLabel: formatShortLabelDate(d2End),
+    };
+
+    return [boxLabel, ...dossierLabels];
+  }
+
   const firstKnownStart = sorted.find(d => d.weekStart)?.weekStart;
   const baseStart = fallbackWeek1Start || firstKnownStart || todayIso;
 

@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { FileSpreadsheet, Upload, CheckCircle2, FileCheck, Clock } from 'lucide-react';
+import { FileSpreadsheet, Upload, CheckCircle2, FileCheck, Clock, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useArchive } from '../../context/ArchiveContext';
 import {
@@ -13,13 +13,17 @@ import {
   SheetParseResult,
 } from '../../utils/excelParser';
 import { ActiveTab } from '../navigation/TopNav';
+import { DeleteUploadModal } from '../common/DeleteUploadModal';
 
 interface ImportDataViewProps {
   onNavigate: (tab: ActiveTab, param?: string) => void;
 }
 
 export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) => {
-  const { boxes, importExcelProjects, uploadHistory, projects, language, showToast } = useArchive();
+  const { boxes, currentUser, importExcelProjects, uploadHistory, projects, language, showToast } = useArchive();
+  const isSystemAdmin = currentUser.role === 'System Admin';
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [targetUploadId, setTargetUploadId] = useState<string | null>(null);
 
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -108,15 +112,34 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <FileSpreadsheet className="w-6 h-6 text-[#0B56A8] dark:text-blue-400" />
-            <span>{language === 'ar' ? 'استيراد بيانات Excel' : 'Excel Import Engine'}</span>
+            <span>{language === 'ar' ? 'استيراد بيانات Excel' : 'Excel Import'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {language === 'ar'
-              ? 'رفع ومعاينة ملفات المشاريع وتوزيعها تلقائياً على البوكسات والدوسيهات.'
-              : 'Upload and preview project spreadsheets for automatic box and dossier assignment.'}
-          </p>
         </div>
+
+        {isSystemAdmin && (boxes.length > 0 || uploadHistory.length > 0) && (
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUploadId(null);
+              setDeleteModalOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#E52225] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/60 hover:bg-[#E52225] hover:text-white rounded-lg transition-colors shrink-0 self-start sm:self-auto"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'مسح رفعة / بيانات' : 'Delete Upload / Data'}</span>
+          </button>
+        )}
       </div>
+
+      <DeleteUploadModal
+        isOpen={deleteModalOpen}
+        scope="operations"
+        initialUploadId={targetUploadId}
+        onClose={() => {
+          setDeleteModalOpen(false);
+          setTargetUploadId(null);
+        }}
+      />
 
       {/* Success Banner */}
       {importSuccessMessage && (
@@ -365,6 +388,9 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
                 <th className="px-3 py-2 text-end text-emerald-600">{language === 'ar' ? 'المستورد' : 'Imported'}</th>
                 <th className="px-3 py-2 text-end text-[#B45309] dark:text-amber-400">{language === 'ar' ? 'المكرر' : 'Duplicates'}</th>
                 <th className="px-3 py-2">{language === 'ar' ? 'النتيجة' : 'Result'}</th>
+                {isSystemAdmin && (
+                  <th className="px-3 py-2 text-center">{language === 'ar' ? 'إجراء' : 'Action'}</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-neutral-800">
@@ -393,11 +419,26 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
                       {u.status}
                     </span>
                   </td>
+                  {isSystemAdmin && (
+                    <td className="px-3 py-2.5 text-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUploadId(u.id);
+                          setDeleteModalOpen(true);
+                        }}
+                        title={language === 'ar' ? 'مسح هذه الرفعة' : 'Delete this upload'}
+                        className="p-1.5 text-[#E52225] hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {uploadHistory.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400">
+                  <td colSpan={isSystemAdmin ? 8 : 7} className="py-8 text-center text-slate-400">
                     {language === 'ar' ? 'لم يتم رفع ملفات بعد' : 'No uploads yet'}
                   </td>
                 </tr>

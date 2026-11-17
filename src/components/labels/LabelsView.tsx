@@ -60,12 +60,12 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
 
   // Automatic mode state
   const [selectedBoxCode, setSelectedBoxCode] = useState<string>(
-    defaultBox?.boxCode || normalizedInitialBox || (isMinutes ? 'C1' : 'D41')
+    defaultBox?.boxCode || normalizedInitialBox || (isMinutes ? 'C13' : 'D41')
   );
 
-  // Manual mode state (Operations uses First Job ID; Comments uses Week 1 Start Date)
+  // Manual mode state (Operations uses First Job ID; Comments uses Week 1 / Month 1 Start Date)
   const [manualBoxCode, setManualBoxCode] = useState(
-    normalizedInitialBox || (isMinutes ? 'C1' : 'D41')
+    normalizedInitialBox || (isMinutes ? 'C13' : 'D41')
   );
   const [manualFirstJobId, setManualFirstJobId] = useState(35200);
   const todayWeekStart = weekStartOf(new Date().toISOString().slice(0, 10));
@@ -94,7 +94,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
       );
       setManualBoxCode(sortedBoxes[0].boxCode);
     } else {
-      const fallback = isMinutes ? 'C1' : 'D41';
+      const fallback = isMinutes ? 'C13' : 'D41';
       setSelectedBoxCode(fallback);
       setManualBoxCode(fallback);
     }
@@ -112,7 +112,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
     }
   }, [initialBoxCode, isMinutes, sortedBoxes, dossiers]);
 
-  // Current active label in preview carousel (0 = Box Label, 1..6 = Dossiers 1..6)
+  // Current active label in preview carousel (0 = Box Label, 1..N = Dossiers 1..N)
   const [activePreviewIndex, setActivePreviewIndex] = useState(0);
   const [previewScale, setPreviewScale] = useState(1.0);
   const [generatingPdf, setGeneratingPdf] = useState(false);
@@ -130,19 +130,28 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
 
   if (isMinutes) {
     if (mode === 'automatic') {
-      const boxCode = currentBox ? currentBox.boxCode : selectedBoxCode || 'C1';
-      activeLabels = buildWeeklyBoxLabelPackage(boxCode, currentBoxDossiers);
+      const boxCode = currentBox ? currentBox.boxCode : selectedBoxCode || 'C13';
+      activeLabels = buildWeeklyBoxLabelPackage(boxCode, currentBoxDossiers, undefined, currentBox?.totalDossiers);
     } else if (mode === 'manual') {
-      const boxCode = manualBoxCode.trim().toUpperCase() || 'C1';
-      activeLabels = buildWeeklyBoxLabelPackage(boxCode, [], weekStartOf(manualWeek1Start || todayWeekStart));
+      const boxCode = manualBoxCode.trim().toUpperCase() || 'C13';
+      const existingManualBox = sortedBoxes.find(b => b.boxCode === boxCode);
+      const isMonthlyManual = existingManualBox?.totalDossiers === 2 || /^C1[34]$/i.test(boxCode);
+      activeLabels = buildWeeklyBoxLabelPackage(
+        boxCode,
+        [],
+        isMonthlyManual ? manualWeek1Start : weekStartOf(manualWeek1Start || todayWeekStart),
+        existingManualBox?.totalDossiers
+      );
     } else {
-      const boxCode = manualBoxCode.trim().toUpperCase() || 'C1';
+      const boxCode = manualBoxCode.trim().toUpperCase() || 'C13';
+      const existingSingleBox = sortedBoxes.find(b => b.boxCode === boxCode);
+      const singleBoxTotal = existingSingleBox?.totalDossiers || (/^C1[34]$/i.test(boxCode) ? 2 : 6);
       activeLabels = [
         {
           type: 'dossier',
           boxCode,
-          dossierNumber: singleDossierNumber,
-          totalDossiers: 6,
+          dossierNumber: Math.min(singleDossierNumber, singleBoxTotal),
+          totalDossiers: singleBoxTotal,
           fromJobId: singleDossierNumber,
           toJobId: singleDossierNumber,
           fromLabel: formatShortLabelDate(singleFromDate),
@@ -230,7 +239,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
       const filename =
         mode === 'single-dossier'
           ? `Label_${manualBoxCode}_Dossier_${singleDossierNumber}.pdf`
-          : `Labels_${activeLabels[0].boxCode}_7Pages.pdf`;
+          : `Labels_${activeLabels[0].boxCode}_${activeLabels.length}Pages.pdf`;
       pdf.save(filename);
       showToast(isAr ? `تم تجهيز ملف الليبلات: ${filename}` : `Downloaded ${filename}`, 'success');
     } catch (err) {
@@ -287,22 +296,13 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
         <div>
           {isMinutes && (
             <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
-              {isAr ? 'أرشفة التعليقات' : 'Comments Archive'}
+              {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
           )}
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <Printer className={`w-6 h-6 ${accentText}`} />
-            <span>{isAr ? 'نظام طباعة الليبلات الحرارية (100×50 مم)' : 'Thermal Label Generator (100×50 mm)'}</span>
+            <span>{isAr ? 'طباعة الليبلات الحرارية (100×50 مم)' : 'Thermal Labels (100×50 mm)'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {isMinutes
-              ? isAr
-                ? 'معاينة وطباعة ليبلات البوكسات والدوسيهات بنطاق التواريخ (FROM / TO) بمقاس 100×50 مم مع رمز QR.'
-                : 'Preview and print 100×50 mm monochrome box and weekly dossier labels with FROM / TO dates and QR codes.'
-              : isAr
-              ? 'معاينة وطباعة ليبلات البوكسات والدوسيهات بمقاس 100×50 مم مع رمز QR.'
-              : 'Preview and print 100×50 mm monochrome archive box and dossier labels with QR codes.'}
-          </p>
         </div>
 
         {/* Direct Print & Download PDF buttons side-by-side */}
@@ -323,13 +323,13 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                 ? isAr
                   ? 'جاري التجهيز للطباعة...'
                   : 'Preparing Print...'
-                : mode === 'single-dossier'
+                : activeLabels.length === 1
                 ? isAr
                   ? 'طباعة مباشرة (صفحة 1)'
                   : 'Print Label (1 Page)'
                 : isAr
-                ? 'طباعة مباشرة (7 صفحات)'
-                : 'Print All (7 Pages)'}
+                ? `طباعة مباشرة (${activeLabels.length} صفحات)`
+                : `Print All (${activeLabels.length} Pages)`}
             </span>
           </button>
 
@@ -345,13 +345,13 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                 ? isAr
                   ? 'جاري تجهيز PDF...'
                   : 'Generating PDF...'
-                : mode === 'single-dossier'
+                : activeLabels.length === 1
                 ? isAr
                   ? 'تحميل PDF (صفحة 1)'
                   : 'Download 1-Page PDF'
                 : isAr
-                ? 'تحميل PDF (7 صفحات)'
-                : 'Download 7-Page PDF'}
+                ? `تحميل PDF (${activeLabels.length} صفحات)`
+                : `Download ${activeLabels.length}-Page PDF`}
             </span>
           </button>
         </div>
@@ -418,8 +418,8 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                     className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${accentFocus}`}
                   >
                     {sortedBoxes.length === 0 ? (
-                      <option value={isMinutes ? 'C1' : 'D41'}>
-                        {isMinutes ? 'Box C1' : 'Box D41'}
+                      <option value={isMinutes ? 'C13' : 'D41'}>
+                        {isMinutes ? 'Box C13' : 'Box D41'}
                       </option>
                     ) : (
                       sortedBoxes.map(b => {
@@ -449,13 +449,17 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
 
                 <div className={`p-3 rounded-lg text-xs space-y-1 border ${accentSoftBox}`}>
                   <div className={`font-bold ${accentText}`}>
-                    {isAr ? 'حزمة الليبلات الناتجة (7 صفحات):' : 'Output Package (7 Pages):'}
+                    {isAr
+                      ? `حزمة الليبلات الناتجة (${activeLabels.length} صفحات):`
+                      : `Output Package (${activeLabels.length} Pages):`}
                   </div>
                   {isMinutes ? (
                     <div className="text-[11px] text-slate-600 dark:text-neutral-300 tabular-nums" dir="ltr">
                       · Page 1: Box {activeLabels[0]?.boxCode} ({activeLabels[0]?.fromLabel} → {activeLabels[0]?.toLabel})
                       <br />
-                      · Pages 2-7: Dossiers 1 to 6 ({isAr ? 'أسبوع تشغيل لكل دوسيه' : '1 week per dossier'})
+                      {activeLabels.length <= 3
+                        ? `· Pages 2-${activeLabels.length}: Dossiers 1 to 2 (${isAr ? 'شهر لكل دوسيه' : '1 month per dossier'})`
+                        : `· Pages 2-7: Dossiers 1 to 6 (${isAr ? 'أسبوع تشغيل لكل دوسيه' : '1 week per dossier'})`}
                     </div>
                   ) : (
                     <div className="text-[11px] text-slate-600 dark:text-neutral-300 tabular-nums" dir="ltr">
@@ -487,17 +491,34 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                   <>
                     <div>
                       <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
-                        {isAr ? 'تاريخ بداية الأسبوع الأول (الأحد)' : 'Week 1 Start Date (Sunday)'}
+                        {activeLabels.length <= 3
+                          ? isAr
+                            ? 'تاريخ بداية الشهر الأول'
+                            : 'Month 1 Start Date'
+                          : isAr
+                          ? 'تاريخ بداية الأسبوع الأول (الأحد)'
+                          : 'Week 1 Start Date (Sunday)'}
                       </label>
                       <input
                         type="date"
                         value={manualWeek1Start}
-                        onChange={e => e.target.value && setManualWeek1Start(weekStartOf(e.target.value))}
+                        onChange={e => {
+                          if (!e.target.value) return;
+                          const clean = e.target.value;
+                          const code = manualBoxCode.trim().toUpperCase();
+                          const existingManualBox = sortedBoxes.find(b => b.boxCode === code);
+                          const isMonthlyManual = existingManualBox?.totalDossiers === 2 || /^C1[34]$/i.test(code);
+                          setManualWeek1Start(isMonthlyManual ? `${clean.slice(0, 7)}-01` : weekStartOf(clean));
+                        }}
                         className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
                       />
                     </div>
                     <div className="text-[11px] text-slate-500 bg-slate-50 dark:bg-neutral-900 p-2.5 rounded-lg tabular-nums">
-                      {isAr
+                      {activeLabels.length <= 3
+                        ? isAr
+                          ? `بوكس شهري (شهران / دوسيهان): من ${activeLabels[0]?.fromLabel} إلى ${activeLabels[0]?.toLabel}`
+                          : `Monthly box (2 months): ${activeLabels[0]?.fromLabel} → ${activeLabels[0]?.toLabel}`
+                        : isAr
                         ? `النظام يحسب تلقائياً 6 أسابيع (أحد → خميس): من ${activeLabels[0]?.fromLabel} إلى ${activeLabels[0]?.toLabel}`
                         : `Auto-calculates 6 weeks (Sun → Thu): ${activeLabels[0]?.fromLabel} → ${activeLabels[0]?.toLabel}`}
                     </div>
@@ -542,36 +563,48 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
-                      {isAr ? 'رقم الدوسيه (1-6)' : 'Dossier # (1-6)'}
-                    </label>
-                    <select
-                      value={singleDossierNumber}
-                      onChange={e => {
-                        const dNum = Number(e.target.value);
-                        setSingleDossierNumber(dNum);
-                        if (isMinutes) {
-                          const d = dossiers.find(
-                            x => x.boxId === manualBoxCode.trim().toUpperCase() && x.dossierNumber === dNum
-                          );
-                          if (d?.weekStart) {
-                            setSingleFromDate(d.weekStart);
-                            setSingleToDate(d.weekEnd || weekEndOf(d.weekStart));
-                          }
-                        } else {
-                          const match = /^D(\d+)$/i.exec(manualBoxCode.trim());
-                          const base = match ? 35200 + (Number(match[1]) - 41) * 300 : 35200;
-                          setSingleDossierFirstJobId(base + (dNum - 1) * 50);
-                        }
-                      }}
-                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${accentFocus}`}
-                    >
-                      {[1, 2, 3, 4, 5, 6].map(num => (
-                        <option key={num} value={num}>
-                          Dossier {num}
-                        </option>
-                      ))}
-                    </select>
+                    {(() => {
+                      const cleanCode = manualBoxCode.trim().toUpperCase();
+                      const existingSingleBox = sortedBoxes.find(b => b.boxCode === cleanCode);
+                      const maxD =
+                        isMinutes && (existingSingleBox?.totalDossiers === 2 || /^C1[34]$/i.test(cleanCode))
+                          ? 2
+                          : 6;
+                      return (
+                        <>
+                          <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                            {isAr ? `رقم الدوسيه (1-${maxD})` : `Dossier # (1-${maxD})`}
+                          </label>
+                          <select
+                            value={Math.min(singleDossierNumber, maxD)}
+                            onChange={e => {
+                              const dNum = Number(e.target.value);
+                              setSingleDossierNumber(dNum);
+                              if (isMinutes) {
+                                const d = dossiers.find(
+                                  x => x.boxId === cleanCode && x.dossierNumber === dNum
+                                );
+                                if (d?.weekStart) {
+                                  setSingleFromDate(d.weekStart);
+                                  setSingleToDate(d.weekEnd || weekEndOf(d.weekStart));
+                                }
+                              } else {
+                                const match = /^D(\d+)$/i.exec(manualBoxCode.trim());
+                                const base = match ? 35200 + (Number(match[1]) - 41) * 300 : 35200;
+                                setSingleDossierFirstJobId(base + (dNum - 1) * 50);
+                              }
+                            }}
+                            className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${accentFocus}`}
+                          >
+                            {Array.from({ length: maxD }, (_, i) => i + 1).map(num => (
+                              <option key={num} value={num}>
+                                Dossier {num}
+                              </option>
+                            ))}
+                          </select>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -693,13 +726,15 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
               )}
             </div>
 
-            {/* Carousel Tabs for the 7 pages */}
+            {/* Carousel Tabs for package pages */}
             {activeLabels.length > 1 && (
               <div>
                 <div className="text-xs font-bold text-slate-700 dark:text-neutral-300 mb-2">
-                  {isAr ? 'صفحات الملف السبعة (اختر للمعاينة):' : 'Package Pages (Click to inspect):'}
+                  {isAr
+                    ? `صفحات الملف (${activeLabels.length} صفحات - اختر للمعاينة):`
+                    : `Package Pages (${activeLabels.length} - Click to inspect):`}
                 </div>
-                <div className="grid grid-cols-7 gap-1.5">
+                <div className={`grid gap-1.5 ${activeLabels.length <= 3 ? 'grid-cols-3' : 'grid-cols-7'}`}>
                   {activeLabels.map((l, idx) => (
                     <button
                       type="button"

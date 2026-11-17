@@ -65,6 +65,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (!store || typeof store !== 'object' || !Array.isArray(store.boxes) || !Array.isArray(store.dossiers) || !Array.isArray(store.projects)) {
             return res.status(400).json({ error: `Invalid ${key} payload.` });
           }
+          if (user.role !== 'System Admin') {
+            const existingRows = await sql`SELECT data::text AS data_text FROM arms_module_records WHERE module_key = ${key} LIMIT 1`;
+            if (existingRows[0]?.data_text) {
+              try {
+                const existing = JSON.parse(existingRows[0].data_text);
+                const prevProjects = Array.isArray(existing?.projects) ? existing.projects.length : 0;
+                const prevUploads = Array.isArray(existing?.uploadHistory) ? existing.uploadHistory.length : 0;
+                const nextUploads = Array.isArray(store.uploadHistory) ? store.uploadHistory.length : 0;
+                if (store.projects.length < prevProjects || nextUploads < prevUploads) {
+                  return res.status(403).json({ error: 'مسح الرفعات أو بيانات القسم متاح لمدير النظام (System Admin) فقط.' });
+                }
+              } catch {
+                /* ignore malformed legacy row */
+              }
+            }
+          }
           const payload = JSON.stringify(store);
           await sql`INSERT INTO arms_module_records (module_key, data, updated_at)
             VALUES (${key}, ${payload}::text::jsonb, NOW())

@@ -1,23 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Archive,
-  Eye,
-  EyeOff,
-  FileBarChart,
-  Globe,
-  KeyRound,
-  LockKeyhole,
-  LogIn,
-  Moon,
-  Printer,
-  ShieldCheck,
-  Sun,
-  UserRound,
-  X,
-} from 'lucide-react';
+import { Archive, Eye, EyeOff, Globe, KeyRound, LockKeyhole, LogIn, MessageSquareText, Moon, ShieldCheck, Sun, UserRound, X } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
 import { IntercomLogo } from '../common/IntercomLogo';
-import archiveReportsHero from '../../assets/images/archive_boxes_d42_d43_shelf_1794679846990.jpg';
+import { PalletBoxesIcon, ReportPaperIcon } from '../common/WorkspaceIcons';
+import loginThreeWorkspacesHero from '../../assets/images/login_three_workspaces_hero_1794934526199.jpg';
 
 const THEME_KEY = 'arms_theme';
 const readTheme = () => {
@@ -28,7 +14,7 @@ const readTheme = () => {
   }
 };
 
-const HERO_IMAGE_SRC = archiveReportsHero;
+const HERO_IMAGE_SRC = loginThreeWorkspacesHero;
 
 export const LoginView: React.FC = () => {
   const { login, setupRequired, authError, language, setLanguage } = useArchive();
@@ -117,19 +103,8 @@ export const LoginView: React.FC = () => {
           <div className="flex flex-col items-center text-center mb-8">
             <IntercomLogo size="lg" className="mb-6" />
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-              {setupRequired ? t('إعداد حساب مدير النظام', 'Create System Administrator') : t('أهلاً بعودتك', 'Welcome Back')}
+              {setupRequired ? t('إعداد حساب مدير النظام', 'Create System Administrator') : t('تسجيل الدخول', 'Sign In')}
             </h1>
-            <p className="text-sm text-slate-500 dark:text-neutral-400 mt-2 max-w-sm leading-relaxed">
-              {setupRequired
-                ? t(
-                    'أنشئ أول حساب مسؤول لتشغيل نظام الأرشيف.',
-                    'Create the initial administrator account to launch the archive system.'
-                  )
-                : t(
-                    'يرجى إدخال بيانات الدخول الخاصة بك للوصول إلى نظام إدارة الأرشيف.',
-                    'Please enter your credentials to access the archive management system.'
-                  )}
-            </p>
           </div>
 
           <form onSubmit={submit} className="space-y-4">
@@ -297,77 +272,70 @@ export const LoginView: React.FC = () => {
         {!heroError ? (
           <img
             src={HERO_IMAGE_SRC}
-            alt="Archive Boxes D42 and D43 with ARMS Thermal Labels"
+            alt="ARMS Archive Center: Operations Boxes, Pallet Racks, and Branch Comments"
             referrerPolicy="no-referrer"
             onError={() => setHeroError(true)}
-            className="absolute inset-0 w-full h-full object-cover object-[center_28%]"
+            className="absolute inset-0 w-full h-full object-cover object-center"
           />
         ) : null}
 
         {/* Measured contrast scrim */}
         <div
-          className="absolute inset-0 bg-gradient-to-b from-[#08162B]/20 via-[#0B56A8]/15 to-black/60 dark:from-black/30 dark:via-black/25 dark:to-black/70"
+          className="absolute inset-0 bg-gradient-to-b from-[#08162B]/15 via-transparent to-black/65 dark:from-black/25 dark:via-black/15 dark:to-black/75"
           aria-hidden="true"
         />
 
-        {/* Lower-Center Frosted Feature Showcase Card */}
+        {/* Lower-Center Frosted 3-Workspaces Showcase Card */}
         <div className="relative z-10 w-full max-w-md rounded-2xl bg-white/92 dark:bg-[#111111]/92 backdrop-blur-md border border-white/75 dark:border-neutral-800/80 p-6 shadow-2xl">
           <div className="text-xs font-bold text-[#0B56A8] dark:text-blue-400">
-            {t('منصة إدارة الأرشيف · ARMS', 'Archive Operations Platform · ARMS')}
+            {t('منصة إدارة الأرشيف · ARMS', 'Archive Management System · ARMS')}
           </div>
 
-          <h2 className="mt-1.5 text-2xl font-extrabold text-[#0B56A8] dark:text-white leading-snug text-balance">
-            {t('كل بيانات الأرشيف في مكان واحد', 'All Archive Operations in One Place')}
+          <h2 className="mt-1.5 text-2xl font-extrabold text-slate-900 dark:text-white leading-snug text-balance">
+            {t('ثلاثة أقسام أرشفة في منصة واحدة', 'Three Archive Modules in One Platform')}
           </h2>
-
-          <p className="mt-2 text-sm text-slate-600 dark:text-neutral-300 leading-relaxed">
-            {t(
-              'تابع حالة البوكسات والدوسيهات، استورد ملفات المشاريع، واطبع الليبلات الحرارية وتقارير التدقيق بسهولة من خلال لوحة واحدة.',
-              'Track archive boxes and dossiers, import project batches, print thermal labels, and monitor audit reports from one unified console.'
-            )}
-          </p>
 
           <hr className="my-4 border-slate-200/90 dark:border-neutral-800/80" />
 
           <div className="space-y-3">
             <div className="flex items-center gap-3.5">
               <div className="w-9 h-9 rounded-xl bg-[#EAF2FB] dark:bg-[#0B56A8]/25 text-[#0B56A8] dark:text-blue-400 flex items-center justify-center shrink-0">
-                <Archive className="w-4.5 h-4.5" />
+                <ReportPaperIcon className="w-4.5 h-4.5" />
               </div>
               <div>
                 <div className="text-sm font-bold text-slate-900 dark:text-white">
-                  {t('البوكسات والدوسيهات', 'Boxes & Dossiers')}
+                  {t('أرشفة تقارير التشغيل', 'Operations Reports Archive')}
                 </div>
                 <div className="text-xs text-slate-500 dark:text-neutral-400">
-                  {t('تتبع دقيق 300 مشروع لكل بوكس', 'Strict 300-slot box & 50-slot dossier tracking')}
+                  {t('البوكسات · الدوسيهات · المشاريع · الليبلات', 'Boxes · Dossiers · Projects · Labels')}
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-3.5">
-              <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-[#B45309] dark:text-amber-400 flex items-center justify-center shrink-0">
-                <FileBarChart className="w-4.5 h-4.5" />
+              <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-[#D97706] dark:text-amber-400 flex items-center justify-center shrink-0">
+                <PalletBoxesIcon className="w-4.5 h-4.5" />
               </div>
               <div>
                 <div className="text-sm font-bold text-slate-900 dark:text-white">
-                  {t('اكتشاف الفجوات والتقارير', 'Gap Detection & Reports')}
+                  {t('أرشفة تقارير تسليم الباليت', 'Pallet Handover Archive')}
                 </div>
                 <div className="text-xs text-slate-500 dark:text-neutral-400">
-                  {t('تحليل فوري للنواقص وسجل الاعتمادات', 'Automated sequence gap detection & 13 reports')}
+                  {t('تسليم الباليتات · السجلات · التقارير', 'Pallet Tracking · Records · Reports')}
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-3.5">
               <div className="w-9 h-9 rounded-xl bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-400 flex items-center justify-center shrink-0">
-                <Printer className="w-4.5 h-4.5" />
+                <MessageSquareText className="w-4.5 h-4.5" />
               </div>
               <div>
                 <div className="text-sm font-bold text-slate-900 dark:text-white">
-                  {t('طباعة الليبلات الحرارية', 'Thermal Label Printing')}
+                  {t('أرشفة تعليقات الفروع', 'Branch Comments Archive')}
                 </div>
                 <div className="text-xs text-slate-500 dark:text-neutral-400">
-                  {t('مطابقة قياسية 100×50 مم مع رمز QR', 'Standard 100×50 mm PDF labels with QR codes')}
+                  {t('البوكسات · الفروع والإرساليات · تقارير التوزيع', 'Boxes · Branches & Shipments · Reports')}
                 </div>
               </div>
             </div>

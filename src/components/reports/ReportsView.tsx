@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FileBarChart, FileDown, Printer, FileSpreadsheet, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileBarChart, FileDown, Printer, FileSpreadsheet, Search, ChevronLeft, ChevronRight, Filter, RotateCcw } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
 import logoColor from '../../assets/logo.png';
 import armsLogoLight from '../../assets/arms-logo.png';
@@ -53,19 +53,19 @@ export const ReportsView: React.FC = () => {
   const isSystemAdmin = currentUser?.role === 'System Admin';
 
   const allReportOptions: ReportOption[] = [
-    { id: 'archived-projects', titleAr: '1. تقرير المشاريع المؤرشفة', titleEn: '1. Archived Projects', group: 'projects' },
-    { id: 'missing-projects', titleAr: '2. تقرير المشاريع المفقودة (الفجوات)', titleEn: '2. Missing Projects (Gaps)', group: 'projects' },
-    { id: 'pending-projects', titleAr: '3. تقرير المشاريع قيد الانتظار', titleEn: '3. Pending Projects', group: 'projects' },
-    { id: 'archived-boxes', titleAr: '4. تقرير البوكسات المكتملة', titleEn: '4. Archived Boxes', group: 'boxes' },
-    { id: 'inprogress-boxes', titleAr: '5. تقرير البوكسات الجارية', titleEn: '5. Inprogress Boxes', group: 'boxes' },
-    { id: 'dossier-report', titleAr: '6. تقرير الدوسيهات الشامل', titleEn: '6. Dossiers Overview', group: 'boxes' },
-    { id: 'box-details-report', titleAr: '7. تقرير تفاصيل البوكسات والدوسيهات', titleEn: '7. Box & Dossier Details', group: 'boxes' },
-    { id: 'boxes-dossiers-ranges', titleAr: '8. تقرير البوكسات ورينجات الدوسيهات', titleEn: '8. Boxes & Dossiers Ranges', group: 'boxes' },
-    { id: 'archive-summary', titleAr: '9. الملخص العام للأرشفة', titleEn: '9. Archive Summary', group: 'operations' },
-    { id: 'upload-history', titleAr: '10. تقرير سجل عمليات الرفع', titleEn: '10. Upload History Log', group: 'operations' },
-    { id: 'user-activity', titleAr: '11. تقرير نشاط المستخدمين (Audit)', titleEn: '11. User Activity (Audit)', group: 'operations' },
-    { id: 'exception-report', titleAr: '12. تقرير الاستثناءات والفجوات', titleEn: '12. Exception Report', group: 'operations' },
-    { id: 'force-close-report', titleAr: '13. تقرير الإغلاق الإداري (Force Close)', titleEn: '13. Force Close Report', group: 'operations' },
+    { id: 'archived-projects', titleAr: 'تقرير المشاريع المؤرشفة', titleEn: 'Archived Projects', group: 'projects' },
+    { id: 'missing-projects', titleAr: 'تقرير المشاريع المفقودة (الفجوات)', titleEn: 'Missing Projects (Gaps)', group: 'projects' },
+    { id: 'pending-projects', titleAr: 'تقرير المشاريع قيد الانتظار', titleEn: 'Pending Projects', group: 'projects' },
+    { id: 'archived-boxes', titleAr: 'تقرير البوكسات المكتملة', titleEn: 'Archived Boxes', group: 'boxes' },
+    { id: 'inprogress-boxes', titleAr: 'تقرير البوكسات الجارية', titleEn: 'Inprogress Boxes', group: 'boxes' },
+    { id: 'dossier-report', titleAr: 'تقرير الدوسيهات الشامل', titleEn: 'Dossiers Overview', group: 'boxes' },
+    { id: 'box-details-report', titleAr: 'تقرير تفاصيل البوكسات والدوسيهات', titleEn: 'Box & Dossier Details', group: 'boxes' },
+    { id: 'boxes-dossiers-ranges', titleAr: 'تقرير البوكسات ورينجات الدوسيهات', titleEn: 'Boxes & Dossiers Ranges', group: 'boxes' },
+    { id: 'archive-summary', titleAr: 'الملخص العام للأرشفة', titleEn: 'Archive Summary', group: 'operations' },
+    { id: 'upload-history', titleAr: 'تقرير سجل عمليات الرفع', titleEn: 'Upload History Log', group: 'operations' },
+    { id: 'user-activity', titleAr: 'تقرير نشاط المستخدمين (Audit)', titleEn: 'User Activity (Audit)', group: 'operations' },
+    { id: 'exception-report', titleAr: 'تقرير الاستثناءات والفجوات', titleEn: 'Exception Report', group: 'operations' },
+    { id: 'force-close-report', titleAr: 'تقرير الإغلاق الإداري (Force Close)', titleEn: 'Force Close Report', group: 'operations' },
   ];
 
   // The User Activity (Audit) report is restricted to System Admin only.
@@ -131,7 +131,7 @@ export const ReportsView: React.FC = () => {
     case 'archived-boxes':
       reportColumns = ['Box Code', 'First Job ID', 'Last Job ID', 'Total Projects', 'Completed Dossiers', 'Status'];
       reportData = sortedBoxes
-        .filter(b => b.status === 'Archived')
+        .filter(b => b.status === 'Archived' && (boxFilter === 'all' || b.boxCode === boxFilter))
         .map(b => ({
           'Box Code': b.boxCode,
           'First Job ID': b.firstJobId,
@@ -145,7 +145,7 @@ export const ReportsView: React.FC = () => {
     case 'inprogress-boxes':
       reportColumns = ['Box Code', 'Range', 'Archived', 'Missing', 'Pending', 'Completion %', 'Force Closed'];
       reportData = sortedBoxes
-        .filter(b => b.status === 'Inprogress')
+        .filter(b => b.status === 'Inprogress' && (boxFilter === 'all' || b.boxCode === boxFilter))
         .map(b => ({
           'Box Code': b.boxCode,
           'Range': `${b.firstJobId} → ${b.lastJobId}`,
@@ -175,29 +175,34 @@ export const ReportsView: React.FC = () => {
 
     case 'box-details-report':
       reportColumns = ['Box Code', 'Total Dossiers', 'Total Projects', 'Archived', 'Missing', 'Force Closed', 'Created'];
-      reportData = sortedBoxes.map(b => ({
-        'Box Code': b.boxCode,
-        'Total Dossiers': 6,
-        'Total Projects': 300,
-        'Archived': b.archivedProjects,
-        'Missing': b.missingProjects,
-        'Force Closed': b.isForceClosed ? 'Yes' : 'No',
-        'Created': b.createdAt.slice(0, 10),
-      }));
+      reportData = sortedBoxes
+        .filter(b => boxFilter === 'all' || b.boxCode === boxFilter)
+        .map(b => ({
+          'Box Code': b.boxCode,
+          'Total Dossiers': 6,
+          'Total Projects': 300,
+          'Archived': b.archivedProjects,
+          'Missing': b.missingProjects,
+          'Force Closed': b.isForceClosed ? 'Yes' : 'No',
+          'Created': b.createdAt.slice(0, 10),
+        }));
       break;
 
-    case 'archive-summary':
+    case 'archive-summary': {
+      const scopedProjects = sortedProjects.filter(p => boxFilter === 'all' || p.boxId === boxFilter);
+      const scopedBoxes = sortedBoxes.filter(b => boxFilter === 'all' || b.boxCode === boxFilter);
       reportColumns = ['Metric', 'Count / Value', 'Notes'];
       reportData = [
-        { 'Metric': 'Total Projects Capacity', 'Count / Value': projects.length, 'Notes': 'Strict 300 slots per box' },
-        { 'Metric': 'Archived Projects', 'Count / Value': projects.filter(p => p.status === 'Archived').length, 'Notes': 'Successfully imported' },
-        { 'Metric': 'Missing Projects', 'Count / Value': projects.filter(p => p.status === 'Missing').length, 'Notes': 'Proven sequence gaps' },
-        { 'Metric': 'Pending Projects', 'Count / Value': projects.filter(p => p.status === 'Pending').length, 'Notes': 'Awaiting physical delivery' },
-        { 'Metric': 'Total Boxes', 'Count / Value': boxes.length, 'Notes': 'Active repository boxes' },
-        { 'Metric': 'Archived Boxes', 'Count / Value': boxes.filter(b => b.status === 'Archived').length, 'Notes': '100% completed' },
-        { 'Metric': 'Force Closed Boxes', 'Count / Value': boxes.filter(b => b.isForceClosed).length, 'Notes': 'Administrative closures' },
+        { 'Metric': 'Total Projects Capacity', 'Count / Value': scopedProjects.length, 'Notes': 'Strict 300 slots per box' },
+        { 'Metric': 'Archived Projects', 'Count / Value': scopedProjects.filter(p => p.status === 'Archived').length, 'Notes': 'Successfully imported' },
+        { 'Metric': 'Missing Projects', 'Count / Value': scopedProjects.filter(p => p.status === 'Missing').length, 'Notes': 'Proven sequence gaps' },
+        { 'Metric': 'Pending Projects', 'Count / Value': scopedProjects.filter(p => p.status === 'Pending').length, 'Notes': 'Awaiting physical delivery' },
+        { 'Metric': 'Total Boxes', 'Count / Value': scopedBoxes.length, 'Notes': 'Active repository boxes' },
+        { 'Metric': 'Archived Boxes', 'Count / Value': scopedBoxes.filter(b => b.status === 'Archived').length, 'Notes': '100% completed' },
+        { 'Metric': 'Force Closed Boxes', 'Count / Value': scopedBoxes.filter(b => b.isForceClosed).length, 'Notes': 'Administrative closures' },
       ];
       break;
+    }
 
     case 'upload-history':
       reportColumns = ['File Name', 'User', 'Timestamp', 'Total Rows', 'Imported', 'Duplicates', 'Status'];
@@ -227,7 +232,7 @@ export const ReportsView: React.FC = () => {
     case 'exception-report':
       reportColumns = ['Job ID', 'Box Code', 'Dossier #', 'Anomaly Type', 'Action Required'];
       reportData = sortedProjects
-        .filter(p => p.status === 'Missing')
+        .filter(p => p.status === 'Missing' && (boxFilter === 'all' || p.boxId === boxFilter))
         .map(p => ({
           'Job ID': p.jobId,
           'Box Code': p.boxId,
@@ -240,7 +245,7 @@ export const ReportsView: React.FC = () => {
     case 'force-close-report':
       reportColumns = ['Box Code', 'Range', 'Reason for Closure', 'Closed By', 'Closed At', 'Archived Count'];
       reportData = sortedBoxes
-        .filter(b => b.isForceClosed)
+        .filter(b => b.isForceClosed && (boxFilter === 'all' || b.boxCode === boxFilter))
         .map(b => ({
           'Box Code': b.boxCode,
           'Range': `${b.firstJobId} → ${b.lastJobId}`,
@@ -637,13 +642,8 @@ export const ReportsView: React.FC = () => {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
             <FileBarChart className="w-6 h-6 text-[#0B56A8] dark:text-blue-400" />
-            <span>{language === 'ar' ? 'مركز التقارير المتقدمة (13 تقرير)' : 'Advanced Reports Center'}</span>
+            <span>{language === 'ar' ? 'مركز التقارير' : 'Reports Center'}</span>
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-neutral-400 mt-0.5">
-            {language === 'ar'
-              ? 'معاينة وتصدير التقارير بصيغة A4 احترافية بهوية Intercom إلى Excel و PDF والطباعة المباشرة.'
-              : 'Clean Intercom A4 portrait report layout exportable to Excel, paginated PDF, and direct Print.'}
-          </p>
         </div>
 
         {/* Action Buttons */}
@@ -685,41 +685,115 @@ export const ReportsView: React.FC = () => {
 
       {/* Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Grouped 13 Reports Sidebar */}
-        <aside className="lg:col-span-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-4">
-          {reportGroups.map(group => {
-            const items = reportOptions.filter(opt => opt.group === group.key);
-            return (
-              <div key={group.key} className="space-y-1">
-                <div className="px-2.5 pb-1 text-[11px] font-bold text-slate-400 dark:text-neutral-500 border-b border-slate-100 dark:border-neutral-800">
-                  {language === 'ar' ? group.labelAr : group.labelEn}
-                </div>
-                <div className="space-y-0.5 pt-1">
-                  {items.map(opt => (
-                    <button
-                      type="button"
-                      key={opt.id}
-                      onClick={() => {
-                        setActiveReport(opt.id);
-                        setSearchTerm('');
-                        setPreviewPage(1);
-                      }}
-                      className={`w-full text-start px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between gap-2 ${
-                        activeReport === opt.id
-                          ? 'bg-[#0B56A8] text-white font-bold shadow-xs'
-                          : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
-                      }`}
-                    >
-                      <span className="truncate">{language === 'ar' ? opt.titleAr : opt.titleEn}</span>
-                    </button>
-                  ))}
-                </div>
+        {/* Report Selector Dropdown & Unified Filter Panel */}
+        <aside className="lg:col-span-4 space-y-3">
+          <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-2">
+            <label
+              htmlFor="ops-report-select"
+              className="block text-[11px] font-bold text-slate-500 dark:text-neutral-400"
+            >
+              {language === 'ar' ? 'اختيار التقرير' : 'Select Report'}
+            </label>
+            <select
+              id="ops-report-select"
+              value={activeReport}
+              onChange={e => {
+                setActiveReport(e.target.value as ReportType);
+                setPreviewPage(1);
+              }}
+              className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-100 focus:outline-none focus:border-[#0B56A8]"
+            >
+              {reportGroups.map(group => {
+                const items = reportOptions.filter(opt => opt.group === group.key);
+                return (
+                  <optgroup
+                    key={group.key}
+                    label={language === 'ar' ? group.labelAr : group.labelEn}
+                  >
+                    {items.map(opt => (
+                      <option key={opt.id} value={opt.id}>
+                        {language === 'ar' ? opt.titleAr : opt.titleEn}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
+            </select>
+          </div>
+
+          <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-neutral-400 flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-[#0B56A8] dark:text-blue-400" />
+                <span>{language === 'ar' ? 'تصفية التقرير' : 'Filter Report'}</span>
+              </span>
+              {(boxFilter !== 'all' || searchTerm) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBoxFilter('all');
+                    setSearchTerm('');
+                    setPreviewPage(1);
+                  }}
+                  className="text-[11px] font-semibold text-[#0B56A8] dark:text-blue-400 hover:underline flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>{language === 'ar' ? 'إعادة ضبط' : 'Reset'}</span>
+                </button>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                {language === 'ar' ? 'البوكس' : 'Box'}
+              </label>
+              <select
+                value={boxFilter}
+                onChange={e => {
+                  setBoxFilter(e.target.value);
+                  setPreviewPage(1);
+                }}
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none focus:border-[#0B56A8]"
+              >
+                <option value="all">
+                  {language === 'ar'
+                    ? `كل البوكسات (${sortedBoxes.length})`
+                    : `All Boxes (${sortedBoxes.length})`}
+                </option>
+                {sortedBoxes.map(b => (
+                  <option key={b.id} value={b.boxCode}>
+                    {b.boxCode} ({b.firstJobId} → {b.lastJobId})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                {language === 'ar' ? 'بحث سريع' : 'Quick Search'}
+              </label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={e => {
+                    setSearchTerm(e.target.value);
+                    setPreviewPage(1);
+                  }}
+                  placeholder={
+                    language === 'ar'
+                      ? 'بوكس، دوسيه، رقم مشروع، ملف...'
+                      : 'Box, dossier, job ID, file...'
+                  }
+                  className="w-full ps-8 pe-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none focus:border-[#0B56A8]"
+                />
               </div>
-            );
-          })}
+            </div>
+          </div>
         </aside>
 
-        {/* Filters & Formal Report Sheet Preview */}
+        {/* Formal Report Sheet Preview */}
         <div className="lg:col-span-8 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-neutral-800">
             <div>
@@ -727,41 +801,6 @@ export const ReportsView: React.FC = () => {
                 {language === 'ar' ? activeOption.titleAr : activeOption.titleEn}
               </h2>
               <p className="text-xs text-slate-500 tabular-nums">{previewRecordLabel}</p>
-            </div>
-
-            {/* Filter controls */}
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="absolute start-2.5 top-2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder={language === 'ar' ? 'تصفية النتائج...' : 'Filter in table...'}
-                  value={searchTerm}
-                  onChange={e => {
-                    setSearchTerm(e.target.value);
-                    setPreviewPage(1);
-                  }}
-                  className="ps-8 pe-3 py-1.5 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#0B56A8] w-36 sm:w-44"
-                />
-              </div>
-
-              {(activeReport.includes('project') || activeReport.includes('dossier')) && (
-                <select
-                  value={boxFilter}
-                  onChange={e => {
-                    setBoxFilter(e.target.value);
-                    setPreviewPage(1);
-                  }}
-                  className="px-2 py-1.5 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-[#0B56A8]"
-                >
-                  <option value="all">{language === 'ar' ? 'كافة البوكسات' : 'All Boxes'}</option>
-                  {sortedBoxes.map(b => (
-                    <option key={b.id} value={b.boxCode}>
-                      Box {b.boxCode}
-                    </option>
-                  ))}
-                </select>
-              )}
             </div>
           </div>
 
