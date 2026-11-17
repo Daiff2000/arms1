@@ -59,6 +59,13 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   const [targetUploadId, setTargetUploadId] = useState<string | null>(null);
 
   const isPallet = workspace === 'pallet-archive';
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived' | 'pending'>('all');
+  const [selectedReportTab, setSelectedReportTab] = useState<'summary' | 'records' | 'audit'>('summary');
+  const [reportBoxFilter, setReportBoxFilter] = useState<string>('all');
+  const [reportSearch, setReportSearch] = useState('');
+  const [labelPreviewCode, setLabelPreviewCode] = useState(isPallet ? 'PLT-001' : 'MIN-001');
+
   const hasPalletData =
     palletArchive.boxes.length > 0 ||
     palletArchive.projects.length > 0 ||
@@ -135,13 +142,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         labelsTitle: isAr ? 'طباعة ليبلات التعليقات' : 'Archive Thermal Labels',
         importTitle: isAr ? 'استيراد بيانات التعليقات' : 'Import Archive Data',
       };
-
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived' | 'pending'>('all');
-  const [selectedReportTab, setSelectedReportTab] = useState<'summary' | 'records' | 'audit'>('summary');
-  const [reportBoxFilter, setReportBoxFilter] = useState<string>('all');
-  const [reportSearch, setReportSearch] = useState('');
-  const [labelPreviewCode, setLabelPreviewCode] = useState(isPallet ? 'PLT-001' : 'MIN-001');
 
   const emptyPieData = [{ name: isAr ? 'فارغ' : 'Empty', value: 1, color: '#E2E8F0' }];
 
