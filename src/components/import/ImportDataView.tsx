@@ -14,6 +14,13 @@ import {
 } from '../../utils/excelParser';
 import { ActiveTab } from '../navigation/TopNav';
 import { DeleteUploadModal } from '../common/DeleteUploadModal';
+import {
+  formatBytes,
+  nextUiFrame,
+  readFileWithProgress,
+  UploadProgressBar,
+  UploadProgressState,
+} from '../common/UploadProgressBar';
 
 interface ImportDataViewProps {
   onNavigate: (tab: ActiveTab, param?: string) => void;
@@ -27,6 +34,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
 
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
   const [currentWorkbook, setCurrentWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [parseResult, setParseResult] = useState<SheetParseResult | null>(null);
@@ -40,22 +48,52 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
   const existingJobIds = new Set(projects.filter(p => p.sourceUpload !== 'Reserved Slot' && p.sourceUpload !== 'System Slot').map(p => p.jobId));
 
   const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || loading) return;
     const file = files[0];
     setLoading(true);
     setImportSuccessMessage(null);
     setUploadedFileName(file.name);
+    setUploadProgress({
+      percent: 5,
+      label: language === 'ar' ? 'جاري قراءة ملف Excel...' : 'Reading Excel file...',
+      detail: `${file.name} · ${formatBytes(file.size)}`,
+    });
 
     try {
-      const data = await file.arrayBuffer();
+      const data = await readFileWithProgress(file, ratio => {
+        setUploadProgress({
+          percent: Math.round(5 + ratio * 35),
+          label: language === 'ar' ? 'جاري تحميل الملف...' : 'Loading file...',
+          detail: `${file.name} · ${formatBytes(file.size)}`,
+        });
+      });
+
+      setUploadProgress({
+        percent: 50,
+        label: language === 'ar' ? 'جاري تحليل شيتات Excel...' : 'Parsing Excel sheets...',
+        detail: file.name,
+      });
+      await nextUiFrame();
+
       const wb = XLSX.read(data, { type: 'array' });
       setCurrentWorkbook(wb);
 
-      // Prefer "بيانات المشاريع"
       const preferred = wb.SheetNames.find(s => s.trim() === 'بيانات المشاريع') || wb.SheetNames[0];
       setSelectedSheet(preferred);
 
+      setUploadProgress({
+        percent: 80,
+        label: language === 'ar' ? `جاري فحص المشاريع في شيت "${preferred}"...` : `Inspecting "${preferred}"...`,
+        detail: file.name,
+      });
+      await nextUiFrame();
+
       const result = parseExcelWorkbook(wb, preferred, existingJobIds);
+      setUploadProgress({
+        percent: 100,
+        label: language === 'ar' ? 'اكتملت القراءة بنجاح' : 'Parsing complete',
+        detail: `${result.validRows.length.toLocaleString()} ${language === 'ar' ? 'مشروع صالح' : 'valid rows'}`,
+      });
       setParseResult(result);
     } catch (err: unknown) {
       console.error('Error parsing Excel:', err);
@@ -66,6 +104,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
       );
     } finally {
       setLoading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -208,6 +247,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
           </button>
         </div>
       )}
+
+      <UploadProgressBar progress={uploadProgress} accent="blue" isAr={language === 'ar'} />
 
       {/* Preview Section before Import */}
       {parseResult && (

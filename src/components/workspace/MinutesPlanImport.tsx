@@ -4,6 +4,13 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, Trash2, Upload } from 'lu
 import { useArchive } from '../../context/ArchiveContext';
 import { buildMinutesPlan, parsePlanWorkbook, ParseResult, PlanBuild } from '../../utils/minutesPlan';
 import { DeleteUploadModal } from '../common/DeleteUploadModal';
+import {
+  formatBytes,
+  nextUiFrame,
+  readFileWithProgress,
+  UploadProgressBar,
+  UploadProgressState,
+} from '../common/UploadProgressBar';
 
 const fmt = (iso: string) => iso.split('-').reverse().join('/');
 
@@ -18,6 +25,7 @@ export const MinutesPlanImport: React.FC = () => {
   const [prefix, setPrefix] = useState('C');
   const [startBox, setStartBox] = useState(13);
   const [dragging, setDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
   const hasExistingData =
@@ -40,12 +48,38 @@ export const MinutesPlanImport: React.FC = () => {
   const readFile = async (file: File) => {
     setError('');
     setParsed(null);
+    setUploadProgress({
+      percent: 10,
+      label: isAr ? 'جاري قراءة ملف الخطة...' : 'Reading plan file...',
+      detail: `${file.name} · ${formatBytes(file.size)}`,
+    });
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const buffer = await readFileWithProgress(file, ratio => {
+        setUploadProgress({
+          percent: Math.round(10 + ratio * 35),
+          label: isAr ? 'جاري تحميل الملف...' : 'Loading file...',
+          detail: `${file.name} · ${formatBytes(file.size)}`,
+        });
+      });
+      setUploadProgress({
+        percent: 55,
+        label: isAr ? 'جاري تحليل شيت خطة التعليقات...' : 'Parsing comments plan sheets...',
+        detail: file.name,
+      });
+      await nextUiFrame();
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+      setUploadProgress({
+        percent: 85,
+        label: isAr ? 'جاري تجهيز الجدول وتوزيع الأسابيع...' : 'Building weekly plan...',
+        detail: file.name,
+      });
+      await nextUiFrame();
       setParsed(parsePlanWorkbook(wb));
       setFileName(file.name);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر قراءة الملف.');
+    } finally {
+      setUploadProgress(null);
     }
   };
 
@@ -104,6 +138,8 @@ export const MinutesPlanImport: React.FC = () => {
         <div className="text-sm font-bold text-slate-900 dark:text-white">{fileName || (isAr ? 'اسحب شيت الخطة هنا أو اضغط للاختيار' : 'Drop the plan sheet here or click to choose')}</div>
         <p className="text-xs text-slate-400">.xlsx · .xlsm · .xls</p>
       </div>
+
+      <UploadProgressBar progress={uploadProgress} accent="red" isAr={isAr} />
 
       {error && <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded-lg px-4 py-3"><AlertTriangle className="w-4 h-4" />{error}</div>}
 

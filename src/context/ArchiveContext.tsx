@@ -22,7 +22,7 @@ import {
 } from '../types';
 import { buildBoxStructure } from '../utils/archiveCalculations';
 import { apiFetch, errorFrom, loadArchiveSnapshot, setSessionToken } from '../utils/archiveApi';
-import { deduplicatePalletReports } from '../utils/palletUtils';
+import { compactPalletReport, deduplicatePalletReports, recomputePalletCapacities } from '../utils/palletUtils';
 import {
   ArchiveScope,
   deleteUploadInOperationsStore,
@@ -83,6 +83,15 @@ export interface ToastMessage {
   type: 'info' | 'success' | 'warning' | 'error';
 }
 
+export interface SaveProgress {
+  phase: 'preparing' | 'uploading' | 'finalizing';
+  percent: number;
+  currentChunk: number;
+  totalChunks: number;
+  uploadedBytes: number;
+  totalBytes: number;
+}
+
 interface ArchiveContextType {
   currentUser: User;
   authenticated: boolean;
@@ -121,8 +130,15 @@ interface ArchiveContextType {
   operationsArchive: WorkspaceArchiveStore;
   activeWorkspace: WorkspaceModule | null;
   setActiveWorkspace: (workspace: WorkspaceModule | null) => void;
-  savePalletReports: (next: PalletReport[], nextUploadHistory?: UploadRecord[]) => Promise<void>;
-  saveMinutesRecords: (next: MinutesRecord[]) => Promise<void>;
+  savePalletReports: (
+    next: PalletReport[],
+    nextUploadHistory?: UploadRecord[],
+    onProgress?: (progress: SaveProgress) => void
+  ) => Promise<void>;
+  saveMinutesRecords: (
+    next: MinutesRecord[],
+    onProgress?: (progress: SaveProgress) => void
+  ) => Promise<void>;
   language: 'ar' | 'en';
   setLanguage: (lang: 'ar' | 'en') => void;
   setCurrentUser: (user: User) => void;
@@ -258,6 +274,111 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     window.setTimeout(() => dismissToast(id), 4500);
   };
 
+  const saveModuleArrayChunked = async (
+    moduleKey: 'palletReports' | 'minutesRecords',
+    items: unknown[],
+    fallbackError: string,
+    timeoutMs = 45000,
+    onProgress?: (progress: SaveProgress) => void
+  ) => {
+    const MAX_CHUNK_BYTES = 1_200_000;
+    const encoder = new TextEncoder();
+    const chunks: unknown[][] = [];
+    const chunkBytes: number[] = [];
+    let currentChunk: unknown[] = [];
+    let currentBytes = 256;
+
+    for (const item of items) {
+      const itemBytes = encoder.encode(JSON.stringify(item)).length + 1;
+      if (currentChunk.length > 0 && currentBytes + itemBytes > MAX_CHUNK_BYTES) {
+        chunks.push(currentChunk);
+        chunkBytes.push(currentBytes);
+        currentChunk = [item];
+        currentBytes = 256 + itemBytes;
+      } else {
+        currentChunk.push(item);
+        currentBytes += itemBytes;
+      }
+    }
+    if (currentChunk.length > 0 || chunks.length === 0) {
+      chunks.push(currentChunk);
+      chunkBytes.push(currentBytes);
+    }
+
+    const totalBytes = chunkBytes.reduce((sum, b) => sum + b, 0);
+    onProgress?.({
+      phase: 'preparing',
+      percent: 12,
+      currentChunk: 0,
+      totalChunks: chunks.length,
+      uploadedBytes: 0,
+      totalBytes,
+    });
+
+    if (chunks.length === 1) {
+      onProgress?.({
+        phase: 'uploading',
+        percent: 45,
+        currentChunk: 1,
+        totalChunks: 1,
+        uploadedBytes: 0,
+        totalBytes,
+      });
+      const r = await apiFetch(
+        '/api/modules',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [moduleKey]: chunks[0] }),
+        },
+        timeoutMs
+      );
+      if (!r.ok) throw new Error(errorFrom(r, fallbackError));
+      onProgress?.({
+        phase: 'finalizing',
+        percent: 92,
+        currentChunk: 1,
+        totalChunks: 1,
+        uploadedBytes: totalBytes,
+        totalBytes,
+      });
+      return;
+    }
+
+    const batchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    let uploadedBytes = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const r = await apiFetch(
+        '/api/modules',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chunked: true,
+            moduleKey,
+            batchId,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            items: chunks[i],
+          }),
+        },
+        timeoutMs
+      );
+      if (!r.ok) throw new Error(errorFrom(r, fallbackError));
+      uploadedBytes += chunkBytes[i] || 0;
+      const ratio = totalBytes > 0 ? uploadedBytes / totalBytes : (i + 1) / chunks.length;
+      const percent = Math.min(94, Math.round(12 + ratio * 82));
+      onProgress?.({
+        phase: i === chunks.length - 1 ? 'finalizing' : 'uploading',
+        percent,
+        currentChunk: i + 1,
+        totalChunks: chunks.length,
+        uploadedBytes,
+        totalBytes,
+      });
+    }
+  };
+
   const loadArchiveState = async () => {
     setArchiveLoading(true);
     setArchiveLoadError('');
@@ -265,16 +386,50 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const [parsed, modulesResult] = await Promise.all([
         loadArchiveSnapshot(),
         apiFetch<{
+          counts?: { palletReports?: number };
           palletReports?: PalletReport[];
           minutesRecords?: MinutesRecord[];
           palletArchive?: WorkspaceArchiveStore;
           minutesArchive?: WorkspaceArchiveStore;
           error?: string;
-        }>('/api/modules', {}, 15000),
+        }>('/api/modules?part=meta', {}, 20000),
       ]);
       if (!modulesResult.ok || !modulesResult.body) {
         throw new Error(errorFrom(modulesResult, 'تعذر تحميل بيانات الأقسام'));
       }
+
+      let rawPalletReports: any[] = [];
+      if (Array.isArray(modulesResult.body.palletReports)) {
+        rawPalletReports = modulesResult.body.palletReports;
+      } else {
+        const totalPalletReports = Math.max(0, Number(modulesResult.body.counts?.palletReports || 0));
+        if (totalPalletReports > 0) {
+          const PALLET_PAGE_SIZE = 2000;
+          const offsets: number[] = [];
+          for (let off = 0; off < totalPalletReports; off += PALLET_PAGE_SIZE) {
+            offsets.push(off);
+          }
+          const pages: any[][] = new Array(offsets.length);
+          for (let i = 0; i < offsets.length; i += 2) {
+            const batch = offsets.slice(i, i + 2);
+            await Promise.all(
+              batch.map(async (off, idx) => {
+                const pageRes = await apiFetch<{ items?: any[]; error?: string }>(
+                  `/api/modules?part=palletReports&offset=${off}&limit=${PALLET_PAGE_SIZE}`,
+                  {},
+                  25000
+                );
+                if (!pageRes.ok || !pageRes.body || !Array.isArray(pageRes.body.items)) {
+                  throw new Error(errorFrom(pageRes, 'تعذر تحميل تقارير الباليت'));
+                }
+                pages[i + idx] = pageRes.body.items;
+              })
+            );
+          }
+          rawPalletReports = pages.flat();
+        }
+      }
+
       skipNextSaveRef.current = true;
       dirtyModulesRef.current = { palletArchive: false, minutesArchive: false };
       setOpBoxes(parsed.boxes || []);
@@ -283,7 +438,6 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setOpUploadHistory(parsed.uploadHistory || []);
       setOpNotifications(parsed.notifications || []);
       setAuditLogs(parsed.auditLogs || []);
-      const rawPalletReports = Array.isArray(modulesResult.body.palletReports) ? modulesResult.body.palletReports : [];
       const { records: cleanPalletReports, removedCount: removedPalletDupes } = deduplicatePalletReports(rawPalletReports);
       setPalletReports(cleanPalletReports);
       setMinutesRecords(Array.isArray(modulesResult.body.minutesRecords) ? modulesResult.body.minutesRecords : []);
@@ -300,11 +454,11 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         parsed.currentUser &&
         ['System Admin', 'Archive Manager', 'Data Entry'].includes(parsed.currentUser.role)
       ) {
-        void apiFetch('/api/modules', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ palletReports: cleanPalletReports }),
-        }).catch(() => undefined);
+        void saveModuleArrayChunked(
+          'palletReports',
+          cleanPalletReports.map(compactPalletReport),
+          'تعذر تحديث بيانات الباليت'
+        ).catch(() => undefined);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'تعذر تحميل بيانات الأرشيف.';
@@ -441,7 +595,11 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setHydrated(false);
   };
 
-  const savePalletReports = async (next: PalletReport[], nextUploadHistory?: UploadRecord[]) => {
+  const savePalletReports = async (
+    next: PalletReport[],
+    nextUploadHistory?: UploadRecord[],
+    onProgress?: (progress: SaveProgress) => void
+  ) => {
     const previous = palletReports;
     const previousArchive = palletArchive;
     const { records: dedupedNext } = deduplicatePalletReports(next);
@@ -455,38 +613,68 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setPalletArchive(nextArchive);
     }
 
-    const payload: Record<string, unknown> = { palletReports: dedupedNext };
-    if (nextUploadHistory) {
-      payload.palletArchive = nextArchive;
-    }
-
-    const r = await apiFetch('/api/modules', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) {
+    const fallbackMsg = language === 'ar' ? 'تعذر حفظ تقارير الباليت' : 'Failed saving pallet reports';
+    try {
+      await saveModuleArrayChunked(
+        'palletReports',
+        dedupedNext.map(compactPalletReport),
+        fallbackMsg,
+        45000,
+        onProgress
+      );
+      if (nextUploadHistory) {
+        const r = await apiFetch(
+          '/api/modules',
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ palletArchive: nextArchive }),
+          },
+          30000
+        );
+        if (!r.ok) {
+          throw new Error(errorFrom(r, fallbackMsg));
+        }
+      }
+      onProgress?.({
+        phase: 'finalizing',
+        percent: 100,
+        currentChunk: 1,
+        totalChunks: 1,
+        uploadedBytes: 1,
+        totalBytes: 1,
+      });
+    } catch (error) {
       setPalletReports(previous);
       if (nextUploadHistory) setPalletArchive(previousArchive);
-      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ تقارير الباليت' : 'Failed saving pallet reports');
+      const msg = error instanceof Error ? error.message : fallbackMsg;
       showToast(msg, 'error');
-      throw new Error(msg);
+      throw error instanceof Error ? error : new Error(msg);
     }
   };
 
-  const saveMinutesRecords = async (next: MinutesRecord[]) => {
+  const saveMinutesRecords = async (
+    next: MinutesRecord[],
+    onProgress?: (progress: SaveProgress) => void
+  ) => {
     const previous = minutesRecords;
     setMinutesRecords(next);
-    const r = await apiFetch('/api/modules', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ minutesRecords: next }),
-    });
-    if (!r.ok) {
+    const fallbackMsg = language === 'ar' ? 'تعذر حفظ سجلات التعليقات' : 'Failed saving comments records';
+    try {
+      await saveModuleArrayChunked('minutesRecords', next, fallbackMsg, 45000, onProgress);
+      onProgress?.({
+        phase: 'finalizing',
+        percent: 100,
+        currentChunk: 1,
+        totalChunks: 1,
+        uploadedBytes: 1,
+        totalBytes: 1,
+      });
+    } catch (error) {
       setMinutesRecords(previous);
-      const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ سجلات التعليقات' : 'Failed saving comments records');
+      const msg = error instanceof Error ? error.message : fallbackMsg;
       showToast(msg, 'error');
-      throw new Error(msg);
+      throw error instanceof Error ? error : new Error(msg);
     }
   };
 
@@ -688,19 +876,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const targetUpload = palletArchive.uploadHistory.find(u => u.id === uploadId);
       const remainingReportsRaw = palletReports.filter(r => r.uploadId !== uploadId);
       const deletedReportsCount = palletReports.length - remainingReportsRaw.length;
-      const totals = new Map<string, number>();
-      remainingReportsRaw.forEach(r => {
-        const key = `${r.palletCode}|${r.deliveryDate || r.inspectionDate}`;
-        totals.set(key, (totals.get(key) || 0) + (r.boxesCount || r.boxCount || 0));
-      });
-      const remainingReports = remainingReportsRaw.map(r => {
-        const total = totals.get(`${r.palletCode}|${r.deliveryDate || r.inspectionDate}`) || 0;
-        return {
-          ...r,
-          palletTotalBoxes: total,
-          capacityStatus: (total > 36 ? 'over-capacity' : 'normal') as 'over-capacity' | 'normal',
-        };
-      });
+      const remainingReports = recomputePalletCapacities(remainingReportsRaw);
 
       const wsResult = deleteUploadInWorkspaceStore(palletArchive, uploadId);
       const nextPalletArchive: WorkspaceArchiveStore = wsResult
@@ -712,21 +888,28 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       if (!targetUpload && deletedReportsCount === 0 && !wsResult) return false;
 
-      const r = await apiFetch(
-        '/api/modules',
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            palletReports: remainingReports,
-            palletArchive: nextPalletArchive,
-          }),
-        },
-        30000
-      );
-
-      if (!r.ok) {
-        showToast(errorFrom(r, language === 'ar' ? 'تعذر حذف الرفعة من قاعدة البيانات' : 'Failed deleting upload'), 'error');
+      const fallbackDeleteErr =
+        language === 'ar' ? 'تعذر حذف الرفعة من قاعدة البيانات' : 'Failed deleting upload';
+      try {
+        await saveModuleArrayChunked(
+          'palletReports',
+          remainingReports.map(compactPalletReport),
+          fallbackDeleteErr
+        );
+        const r = await apiFetch(
+          '/api/modules',
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ palletArchive: nextPalletArchive }),
+          },
+          30000
+        );
+        if (!r.ok) {
+          throw new Error(errorFrom(r, fallbackDeleteErr));
+        }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : fallbackDeleteErr, 'error');
         return false;
       }
 

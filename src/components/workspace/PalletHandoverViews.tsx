@@ -23,6 +23,13 @@ import { useArchive } from '../../context/ArchiveContext';
 import { PalletReport, UploadRecord } from '../../types';
 import { ActiveTab } from '../navigation/TopNav';
 import { DeleteUploadModal } from '../common/DeleteUploadModal';
+import {
+  formatBytes,
+  nextUiFrame,
+  readFileWithProgress,
+  UploadProgressBar,
+  UploadProgressState,
+} from '../common/UploadProgressBar';
 import { formatShortLabelDate } from '../../utils/labelGenerator';
 import { weekEndOf, weekStartOf } from '../../utils/minutesPlan';
 import { palletRecordDedupKey, recomputePalletCapacities } from '../../utils/palletUtils';
@@ -280,6 +287,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
   const BackArrow = isAr ? ArrowRight : ArrowLeft;
 
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState('');
   const [preview, setPreview] = useState<PalletReport[]>([]);
@@ -394,19 +402,52 @@ export const PalletHandoverViews: React.FC<Props> = ({
   }, [selectedMonthKey, dossierByMonth]);
 
   const handleFile = async (file?: File) => {
-    if (!file) return;
+    if (!file || busy) return;
     setBusy(true);
     setFileName(file.name);
     setDuplicatePreviewCount(0);
     setEnrichUpdates({});
     setEnrichPreview([]);
     setScannedSheetNames([]);
+    setUploadProgress({
+      percent: 5,
+      label: isAr ? 'جاري قراءة ملف Excel...' : 'Reading Excel file...',
+      detail: `${file.name} · ${formatBytes(file.size)}`,
+    });
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const buffer = await readFileWithProgress(file, ratio => {
+        setUploadProgress({
+          percent: Math.round(5 + ratio * 20),
+          label: isAr ? 'جاري تحميل محتوى الملف...' : 'Loading file buffer...',
+          detail: `${file.name} · ${formatBytes(file.size)}`,
+        });
+      });
+
+      setUploadProgress({
+        percent: 30,
+        label: isAr ? 'جاري فك ضغط وتحليل هيكل الشيتات...' : 'Parsing workbook sheets...',
+        detail: file.name,
+      });
+      await nextUiFrame();
+
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
       const parsed: PalletReport[] = [];
       const matchedSheets: string[] = [];
+      const totalSheets = Math.max(1, wb.SheetNames.length);
 
-      wb.SheetNames.forEach(sheetName => {
+      for (let sIdx = 0; sIdx < wb.SheetNames.length; sIdx++) {
+        const sheetName = wb.SheetNames[sIdx];
+        setUploadProgress({
+          percent: Math.round(35 + ((sIdx + 1) / totalSheets) * 50),
+          label: isAr
+            ? `جاري قراءة الشيت (${sIdx + 1} من ${totalSheets}): ${sheetName}`
+            : `Reading sheet (${sIdx + 1}/${totalSheets}): ${sheetName}`,
+          detail: isAr
+            ? `${parsed.length.toLocaleString()} سجل مقروء حتى الآن`
+            : `${parsed.length.toLocaleString()} rows read so far`,
+        });
+        await nextUiFrame();
+
         const sheet = wb.Sheets[sheetName];
         const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: true });
         const headerIndex = matrix.findIndex(row => {
@@ -419,7 +460,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
             h.some(c => BOXES_ALIASES.includes(c))
           );
         });
-        if (headerIndex < 0) return;
+        if (headerIndex < 0) continue;
 
         const headers = matrix[headerIndex] || [];
         const palletCol = findColumn(headers, PALLET_ALIASES);
@@ -467,7 +508,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
             archived: true,
           });
         });
-      });
+      }
 
       if (!matchedSheets.length || !parsed.length) {
         throw new Error(
@@ -476,6 +517,13 @@ export const PalletHandoverViews: React.FC<Props> = ({
             : 'No worksheet found with the required columns (Pallet, Date/Data, Job Code, No Boxes) and valid rows.'
         );
       }
+
+      setUploadProgress({
+        percent: 90,
+        label: isAr ? 'جاري فحص التكرار وحساب سعة الباليتات...' : 'Deduplicating rows & computing capacities...',
+        detail: `${parsed.length.toLocaleString()} ${isAr ? 'صف' : 'rows'}`,
+      });
+      await nextUiFrame();
 
       const existingMap = new Map<string, PalletReport>();
       for (const existing of palletReports) {
@@ -524,6 +572,11 @@ export const PalletHandoverViews: React.FC<Props> = ({
       }
 
       const withCapacities = recomputeCapacities(uniqueParsed);
+      setUploadProgress({
+        percent: 100,
+        label: isAr ? 'اكتملت قراءة الملف' : 'File ready for review',
+        detail: `${withCapacities.length.toLocaleString()} ${isAr ? 'سجل جاهز' : 'records ready'}`,
+      });
       setScannedSheetNames(matchedSheets);
       setDuplicatePreviewCount(dupes);
       setEnrichUpdates(pendingUpdates);
@@ -544,6 +597,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
       setEnrichPreview([]);
     } finally {
       setBusy(false);
+      setUploadProgress(null);
     }
   };
 
@@ -555,6 +609,12 @@ export const PalletHandoverViews: React.FC<Props> = ({
       return;
     }
     setBusy(true);
+    setUploadProgress({
+      percent: 6,
+      label: isAr ? 'جاري تجهيز السجلات للحفظ...' : 'Preparing records for upload...',
+      detail: `${(preview.length + updatesCount).toLocaleString()} ${isAr ? 'سجل' : 'records'}`,
+    });
+    await nextUiFrame();
     try {
       const uploadId = `pallet-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const updatedExisting = palletReports.map(existing => {
@@ -592,7 +652,6 @@ export const PalletHandoverViews: React.FC<Props> = ({
             : 'All records in this file already exist in the archive.',
           'warning'
         );
-        setBusy(false);
         return;
       }
 
@@ -611,7 +670,35 @@ export const PalletHandoverViews: React.FC<Props> = ({
       };
       const nextHistory = [newUploadEntry, ...palletArchive.uploadHistory];
 
-      await savePalletReports(combined, nextHistory);
+      await savePalletReports(combined, nextHistory, progress => {
+        const batchLabel =
+          progress.totalChunks > 1
+            ? isAr
+              ? ` (دفعة ${Math.max(1, progress.currentChunk)} من ${progress.totalChunks})`
+              : ` (batch ${Math.max(1, progress.currentChunk)}/${progress.totalChunks})`
+            : '';
+        const label =
+          progress.phase === 'preparing'
+            ? isAr
+              ? 'جاري ضغط وتقسيم البيانات للرفع...'
+              : 'Compressing & chunking payload...'
+            : progress.phase === 'finalizing' && progress.percent >= 95
+            ? isAr
+              ? 'جاري اعتماد البيانات في قاعدة البيانات...'
+              : 'Finalizing archive save...'
+            : isAr
+            ? `جاري رفع البيانات إلى الخادم${batchLabel}...`
+            : `Uploading records to server${batchLabel}...`;
+        const detail =
+          progress.totalBytes > 10
+            ? `${combined.length.toLocaleString()} ${isAr ? 'إجمالي السجلات' : 'total records'} · ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`
+            : `${combined.length.toLocaleString()} ${isAr ? 'إجمالي السجلات' : 'total records'}`;
+        setUploadProgress({
+          percent: progress.percent,
+          label,
+          detail,
+        });
+      });
       showToast(
         isAr
           ? `تم الحفظ بنجاح${fresh.length > 0 ? `: ${fresh.length} سجل جديد` : ''}${updatesCount > 0 ? ` · تحديث ${updatesCount} سجل موجود` : ''}${skippedDupes > 0 ? ` (تخطي ${skippedDupes} مكرر)` : ''}`
@@ -629,6 +716,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
       /* savePalletReports displays the error toast */
     } finally {
       setBusy(false);
+      setUploadProgress(null);
     }
   };
 
@@ -882,11 +970,20 @@ export const PalletHandoverViews: React.FC<Props> = ({
           </p>
         </label>
 
+        {uploadProgress && preview.length === 0 && enrichPreview.length === 0 && (
+          <UploadProgressBar progress={uploadProgress} accent="amber" isAr={isAr} />
+        )}
+
         {(preview.length > 0 || enrichPreview.length > 0) && (() => {
           const previewRowsToDisplay = preview.length > 0 ? preview : enrichPreview;
           const updatesCount = enrichPreview.length;
           return (
             <section className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-xs">
+              {uploadProgress && (
+                <div className="p-4 border-b border-slate-100 dark:border-neutral-800">
+                  <UploadProgressBar progress={uploadProgress} accent="amber" isAr={isAr} />
+                </div>
+              )}
               <div className="p-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-neutral-800">
                 <div>
                   <h2 className="font-bold text-sm text-slate-900 dark:text-white">
