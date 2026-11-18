@@ -54,6 +54,7 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
     setActiveWorkspace,
     operationsArchive,
     palletArchive,
+    palletReports,
     minutesArchive,
     archiveLoading,
   } = useArchive();
@@ -113,9 +114,30 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
       code: 'PALLET',
       title: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Archive',
       metrics: [
-        { label: isAr ? 'البوكسات' : 'Boxes', value: fmtCount(palletArchive.boxes.length) },
-        { label: isAr ? 'الدوسيهات' : 'Dossiers', value: fmtCount(palletArchive.dossiers.length) },
-        { label: isAr ? 'السجلات' : 'Records', value: fmtCount(palletArchive.projects.length) },
+        {
+          label: isAr ? 'الباليتات' : 'Pallets',
+          value: fmtCount(
+            palletReports.length > 0
+              ? new Set(palletReports.map(r => r.palletCode).filter(Boolean)).size
+              : palletArchive.boxes.length
+          ),
+        },
+        {
+          label: isAr ? 'الشهور' : 'Months',
+          value: fmtCount(
+            palletReports.length > 0
+              ? new Set(
+                  palletReports
+                    .map(r => r.archiveMonth || r.deliveryDate?.slice(0, 7) || r.inspectionDate?.slice(0, 7))
+                    .filter(Boolean)
+                ).size
+              : palletArchive.dossiers.length
+          ),
+        },
+        {
+          label: isAr ? 'السجلات' : 'Records',
+          value: fmtCount(palletReports.length > 0 ? palletReports.length : palletArchive.projects.length),
+        },
       ],
       image: palletReportsImg,
       imageAlt: isAr

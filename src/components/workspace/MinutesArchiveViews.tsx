@@ -1310,38 +1310,40 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
 
     return (
       <div className="space-y-5">
+        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-200 dark:border-neutral-800">
           <div>
-            <div className="text-[11px] font-bold mb-0.5 text-[#E52225] dark:text-red-400">
+            <div className="text-[11px] font-bold text-[#E52225] dark:text-red-400 mb-0.5">
               {isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive'}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-              {isAr ? 'لوحة المتابعة والتحكم' : 'Workspace Dashboard'}
+              {isAr ? 'لوحة متابعة أرشفة الفروع' : 'Branch Comments Dashboard'}
             </h1>
           </div>
 
-          <div className="flex items-center gap-2">
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => onNavigate('import')}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C81D20] rounded-lg transition-colors whitespace-nowrap"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>{isAr ? 'استيراد شيت الفروع' : 'Import Plan Sheet'}</span>
-              </button>
-            )}
-          </div>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => onNavigate('import')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#E52225] hover:bg-[#C41C1F] rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>{isAr ? 'استيراد شيت الفروع' : 'Import Plan Sheet'}</span>
+            </button>
+          )}
         </div>
 
-        {/* Global Search Bar (same as Operations Reports) */}
+        {/* Global Search Bar */}
         <GlobalSearch onNavigate={onNavigate} />
 
         {/* Date From / To & Status Filter Card */}
         {renderDateStatusFilterCard('dashboard', dashTotal)}
 
-        {/* 4-KPI Strip */}
-        <section className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+        {/* Unified KPI Strip + Progress Bar */}
+        <section
+          aria-label={isAr ? 'ملخص مؤشرات الفروع' : 'Branch Comments Metrics Summary'}
+          className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden"
+        >
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-slate-200 dark:bg-neutral-800">
             <button
               type="button"
@@ -1356,7 +1358,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 {dashTotal.toLocaleString()}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                {dashBoxes.length} {isAr ? 'بوكس' : 'boxes'} · {dashDossiers.length} {isAr ? 'دوسيه أسبوعي' : 'weekly dossiers'}
+                {dashBoxes.length} {isAr ? 'بوكس' : 'boxes'} · {dashDossiers.length} {isAr ? 'دوسيه' : 'dossiers'}
               </div>
             </button>
 
@@ -1420,9 +1422,18 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
               </span>
             </div>
             <div className="flex-1 bg-slate-200 dark:bg-neutral-800/80 rounded-full h-2 overflow-hidden flex">
-              <div className="bg-emerald-500 h-full transition-all" style={{ width: `${dashArchivedPercent}%` }} />
+              <div
+                className="bg-emerald-500 h-full transition-all"
+                style={{ width: `${dashTotal > 0 ? (dashArchived / dashTotal) * 100 : 0}%` }}
+              />
+              <div
+                className="bg-[#E52225] h-full transition-all"
+                style={{ width: `${dashTotal > 0 ? (dashMissing / dashTotal) * 100 : 0}%` }}
+              />
             </div>
-            <span className="text-xs font-extrabold tabular-nums shrink-0 text-[#E52225]">{dashArchivedPercent}%</span>
+            <span className="text-xs font-extrabold text-[#E52225] dark:text-red-400 tabular-nums shrink-0">
+              {dashArchivedPercent}%
+            </span>
           </div>
         </section>
 
@@ -1501,7 +1512,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                           </div>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
-                          <span className="text-xs font-bold tabular-nums text-slate-700 dark:text-neutral-300">{pct}%</span>
+                          <span className="font-mono text-xs font-bold tabular-nums text-slate-700 dark:text-neutral-300">{pct}%</span>
                           {statusBadge(b.status)}
                         </div>
                       </button>
@@ -1533,12 +1544,12 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                     className="w-full px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-neutral-900/50 transition-colors text-start group flex-1"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-red-50 dark:bg-red-950/50 text-[#E52225] dark:text-red-400">
+                      <span className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-red-50 dark:bg-red-950/50 text-[#E52225] dark:text-red-400">
                         <Icon className="w-4 h-4" />
                       </span>
                       <div className="min-w-0">
                         <div className="text-xs font-bold text-slate-900 dark:text-white truncate group-hover:text-[#E52225]">{a.label}</div>
-                        <div className="text-[10px] text-slate-400">{a.sub}</div>
+                        <div className="text-[11px] text-slate-400">{a.sub}</div>
                       </div>
                     </div>
                     <DirectionalArrow className="w-3.5 h-3.5 text-slate-400 shrink-0 group-hover:text-[#E52225]" />
@@ -1556,7 +1567,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
             <div className="relative h-48 my-2">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={54} outerRadius={76} dataKey="value" stroke="none">
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={56} outerRadius={76} dataKey="value" stroke="none">
                     {pieData.map((entry, idx) => (
                       <Cell key={idx} fill={entry.color} />
                     ))}
@@ -1576,10 +1587,10 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                 { label: isAr ? 'مفقود' : 'Missing', count: dashMissing, color: '#E52225' },
               ].map(item => (
                 <div key={item.label} className="flex flex-col">
-                  <span className="text-[11px] text-slate-500 dark:text-neutral-400 flex items-center justify-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: item.color }} />
+                  <div className="flex items-center justify-center gap-1 text-[11px] text-slate-500 dark:text-neutral-400">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.color }} />
                     <span>{item.label}</span>
-                  </span>
+                  </div>
                   <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums mt-0.5">{item.count}</span>
                 </div>
               ))}
@@ -1614,7 +1625,7 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       <th className="px-5 py-2.5 text-end">{isAr ? 'الحالة' : 'Status'}</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-slate-100 dark:divide-neutral-800">
                     {uploadHistory.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="py-12 text-center text-slate-400">
@@ -1623,10 +1634,10 @@ export const MinutesArchiveViews: React.FC<MinutesArchiveViewsProps> = ({
                       </tr>
                     ) : (
                       uploadHistory.slice(0, 5).map(u => (
-                        <tr key={u.id} className="border-b border-slate-50 dark:border-neutral-900">
+                        <tr key={u.id}>
                           <td className="px-5 py-2.5 font-semibold text-slate-900 dark:text-white">{u.fileName}</td>
                           <td className="px-3 py-2.5 text-slate-500 tabular-nums">{fmtDate(u.timestamp)}</td>
-                          <td className="px-3 py-2.5 text-end font-bold tabular-nums">{u.importedCount}</td>
+                          <td className="px-3 py-2.5 text-end font-mono font-bold tabular-nums">{u.importedCount}</td>
                           <td className="px-5 py-2.5 text-end text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
                             {u.status}
                           </td>

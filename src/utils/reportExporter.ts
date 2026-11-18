@@ -641,6 +641,7 @@ export interface CommentsReportExportOptions {
   summaryItems: { label: string; value: string }[];
   preparedBy: string;
   printDate: string;
+  filePrefix?: string;
 }
 
 function drawCommentsPageHeaderAndFooter(
@@ -1119,7 +1120,8 @@ export async function exportCommentsReportToPDF(opts: CommentsReportExportOption
     pdf.addImage(imgData, 'PNG', 0, 0, 210, 297);
   }
 
-  const fileName = `ARMS_Comments_${opts.reportId}_${new Date().toISOString().slice(0, 10)}.pdf`;
+  const prefix = opts.filePrefix || 'ARMS_Comments';
+  const fileName = `${prefix}_${opts.reportId}_${new Date().toISOString().slice(0, 10)}.pdf`;
   pdf.save(fileName);
   return fileName;
 }

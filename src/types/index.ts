@@ -126,6 +126,7 @@ export interface AuditLogEntry {
 export interface LabelData {
   type: 'box' | 'dossier';
   boxCode: string;
+  subtitle?: string; // optional footer label (defaults to ARCHIVE BOX)
   dossierNumber?: number; // 1-6 if dossier
   totalDossiers?: number; // 6
   fromJobId: number;

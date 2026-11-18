@@ -1,10 +1,6 @@
 /**
- * ARMS - Dashboard View
- * Calm, executive-grade layout with minimal visual clutter:
- * - Unified 4-KPI + Progress strip
- * - Sleek Horizontal Box Capacity Meters (300 slots per box — clean bar, count & %)
- * - Streamlined Quick Actions rail
- * - Centered Status Donut & concise Recent Uploads + Missing Alerts
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 import React, { useState } from 'react';
@@ -318,7 +314,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               </div>
             </div>
 
-            {/* Ultra-Clean Horizontal Progress Bars (zero cluttered micro-details) */}
+            {/* Ultra-Clean Horizontal Progress Bars */}
             <div className="divide-y divide-slate-100 dark:divide-neutral-800">
               {visibleBoxes.slice(0, 6).map(box => {
                 const capacity = box.totalProjects || 300;
@@ -339,7 +335,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                     onClick={() => onNavigate('box-detail', box.boxCode)}
                     className="w-full px-5 py-3.5 flex items-center gap-4 hover:bg-slate-50/80 dark:hover:bg-neutral-900/40 transition-colors text-start group"
                   >
-                    {/* Box Code */}
                     <div className="flex items-center gap-2.5 w-24 shrink-0">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
                       <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-[#0B56A8] dark:group-hover:text-blue-400 transition-colors">
@@ -348,7 +343,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                       {box.isForceClosed && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
                     </div>
 
-                    {/* Sleek 300-Slot Capacity Bar */}
                     <div className="flex-1 h-2.5 bg-slate-100 dark:bg-neutral-900 rounded-full overflow-hidden flex">
                       <div
                         className="bg-[#0B56A8] h-full transition-all duration-300"
@@ -360,7 +354,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                       />
                     </div>
 
-                    {/* Clean Right Numeric Summary */}
                     <div className="flex items-center justify-end gap-3 w-28 shrink-0 tabular-nums">
                       <span className="text-xs font-medium text-slate-500 dark:text-neutral-400">
                         {box.archivedProjects} / {capacity}
@@ -381,7 +374,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           </div>
 
-          {/* Minimal Legend Footer */}
           <div className="px-5 py-3 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-between text-[11px] text-slate-500">
             <div className="flex items-center gap-5">
               <span className="flex items-center gap-1.5">

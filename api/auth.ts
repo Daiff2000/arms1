@@ -134,6 +134,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(201).json({ user: safeUser(inserted[0]), sessionToken: session.value });
     }
 
+    if (body.action === 'update-profile') {
+      const session = readSession(req);
+      if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
+      const rawName = String(body.name ?? '').trim();
+      const rawUsername = String(body.username ?? '').trim().toLowerCase();
+      const rawEmail = String(body.email ?? '').trim().slice(0, 160);
+      if (!rawName || rawName.length > 120) {
+        return res.status(400).json({ error: 'يرجى إدخال اسم كامل صالح (بحد أقصى 120 حرفاً).' });
+      }
+      if (!rawUsername || rawUsername.length > 80 || /\s/.test(rawUsername)) {
+        return res.status(400).json({ error: 'يرجى إدخال اسم مستخدم صالح بدون مسافات.' });
+      }
+      const existing = await sql`SELECT id FROM arms_users WHERE username = ${rawUsername} AND id <> ${session.sub} LIMIT 1`;
+      if (existing.length > 0) {
+        return res.status(409).json({ error: 'اسم المستخدم مستخدم بالفعل.' });
+      }
+      const updated = await sql`UPDATE arms_users
+        SET name = ${rawName},
+            username = ${rawUsername},
+            email = ${rawEmail},
+            updated_at = NOW()
+        WHERE id = ${session.sub} AND active = TRUE
+        RETURNING id, username, email, name, role, active, last_login`;
+      if (!updated.length) return res.status(404).json({ error: 'الحساب غير موجود أو غير نشط.' });
+      const refreshed = createSession({ id: updated[0].id, username: updated[0].username });
+      res.setHeader('Set-Cookie', sessionCookie(refreshed.value, refreshed.maxAge, req));
+      return res.status(200).json({ user: safeUser(updated[0]), sessionToken: refreshed.value });
+    }
+
     if (body.action === 'change-password') {
       const session = readSession(req);
       if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
@@ -186,7 +215,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     return res.status(400).json({ error: 'Unknown authentication action.' });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'اسم المستخدم مستخدم بالفعل.' });
+    }
     console.error('ARMS auth error:', error);
     const info = describeError(error);
     return res.status(info.status).json({ error: info.error, code: info.code, detail: info.detail });

@@ -22,6 +22,7 @@ import {
   Moon,
   LayoutGrid,
   MessageSquareText,
+  Check,
 } from 'lucide-react';
 import { useArchive } from '../../context/ArchiveContext';
 import { WorkspaceModule } from '../../types';
@@ -69,12 +70,14 @@ export const TopNav: React.FC<TopNavProps> = ({
     setActiveWorkspace,
     operationsArchive,
     palletArchive,
+    palletReports,
     minutesArchive,
   } = useArchive();
 
   const isAr = language === 'ar';
 
   const [archiveDropdownOpen, setArchiveDropdownOpen] = useState(false);
+  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -88,20 +91,40 @@ export const TopNav: React.FC<TopNavProps> = ({
   }, [darkMode]);
 
   const archiveRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const mobileWorkspaceRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (archiveRef.current && !archiveRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (archiveRef.current && !archiveRef.current.contains(target)) {
         setArchiveDropdownOpen(false);
       }
-      if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
+      if (
+        (!workspaceRef.current || !workspaceRef.current.contains(target)) &&
+        (!mobileWorkspaceRef.current || !mobileWorkspaceRef.current.contains(target))
+      ) {
+        setWorkspaceDropdownOpen(false);
+      }
+      if (profileRef.current && !profileRef.current.contains(target)) {
+        setProfileDropdownOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setArchiveDropdownOpen(false);
+        setWorkspaceDropdownOpen(false);
         setProfileDropdownOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const isOperations = activeWorkspace !== 'pallet-archive' && activeWorkspace !== 'minutes-archive';
@@ -153,9 +176,10 @@ export const TopNav: React.FC<TopNavProps> = ({
     fullLabel: string;
     boxCount: number;
     icon: React.ComponentType<{ className?: string }>;
-    accentHex: string;
-    activeClass: string;
-    hoverClass: string;
+    iconColorClass: string;
+    tintBadgeClass: string;
+    activeRowClass: string;
+    triggerAccentClass: string;
   }> = [
     {
       id: 'reports-archive',
@@ -163,32 +187,35 @@ export const TopNav: React.FC<TopNavProps> = ({
       fullLabel: isAr ? 'أرشفة تقارير التشغيل' : 'Operations Reports Archive',
       boxCount: operationsArchive.boxes.length,
       icon: ReportPaperIcon,
-      accentHex: '#0B56A8',
-      activeClass:
-        'bg-white dark:bg-[#191B20] text-[#0B56A8] dark:text-blue-400 shadow-xs ring-1 ring-[#0B56A8]/20 dark:ring-blue-500/30',
-      hoverClass: 'hover:text-[#0B56A8] dark:hover:text-blue-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+      iconColorClass: 'text-[#0B56A8] dark:text-blue-400',
+      tintBadgeClass: 'bg-[#EAF2FB] text-[#0B56A8] dark:bg-[#0B56A8]/25 dark:text-blue-400',
+      activeRowClass: 'bg-[#EAF2FB]/70 dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold',
+      triggerAccentClass: 'border-slate-200 dark:border-neutral-800 hover:border-[#0B56A8]/50 dark:hover:border-blue-500/40',
     },
     {
       id: 'pallet-archive',
       shortLabel: isAr ? 'الباليت' : 'Pallet',
       fullLabel: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Archive',
-      boxCount: palletArchive.boxes.length,
+      boxCount:
+        palletReports.length > 0
+          ? new Set(palletReports.map(r => r.palletCode).filter(Boolean)).size
+          : palletArchive.boxes.length,
       icon: PalletBoxesIcon,
-      accentHex: '#D97706',
-      activeClass:
-        'bg-white dark:bg-[#191B20] text-[#B45309] dark:text-amber-400 shadow-xs ring-1 ring-amber-500/25 dark:ring-amber-500/30',
-      hoverClass: 'hover:text-[#B45309] dark:hover:text-amber-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+      iconColorClass: 'text-[#D97706] dark:text-amber-400',
+      tintBadgeClass: 'bg-amber-50 text-[#B45309] dark:bg-amber-950/50 dark:text-amber-400',
+      activeRowClass: 'bg-amber-50/90 dark:bg-amber-950/35 text-[#B45309] dark:text-amber-300 font-bold',
+      triggerAccentClass: 'border-slate-200 dark:border-neutral-800 hover:border-[#D97706]/50 dark:hover:border-amber-500/40',
     },
     {
       id: 'minutes-archive',
-      shortLabel: isAr ? 'تعليقات الفروع' : 'Branches',
+      shortLabel: isAr ? 'التعليقات' : 'Branches',
       fullLabel: isAr ? 'أرشفة تعليقات الفروع' : 'Branch Comments Archive',
       boxCount: minutesArchive.boxes.length,
       icon: MessageSquareText,
-      accentHex: '#E52225',
-      activeClass:
-        'bg-white dark:bg-[#191B20] text-[#E52225] dark:text-red-400 shadow-xs ring-1 ring-[#E52225]/25 dark:ring-red-500/30',
-      hoverClass: 'hover:text-[#E52225] dark:hover:text-red-400 hover:bg-white/70 dark:hover:bg-neutral-800/80',
+      iconColorClass: 'text-[#E52225] dark:text-red-400',
+      tintBadgeClass: 'bg-red-50 text-[#E52225] dark:bg-red-950/50 dark:text-red-400',
+      activeRowClass: 'bg-red-50/90 dark:bg-red-950/35 text-[#E52225] dark:text-red-300 font-bold',
+      triggerAccentClass: 'border-slate-200 dark:border-neutral-800 hover:border-[#E52225]/50 dark:hover:border-red-500/40',
     },
   ];
 
@@ -197,6 +224,8 @@ export const TopNav: React.FC<TopNavProps> = ({
     : isMinutes
     ? 'minutes-archive'
     : 'reports-archive';
+  const currentDockItem = workspaceDockItems.find(w => w.id === currentDockId) || workspaceDockItems[0];
+  const CurrentDockIcon = currentDockItem.icon;
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-[#111111] border-b border-slate-200 dark:border-neutral-800">
@@ -274,61 +303,88 @@ export const TopNav: React.FC<TopNavProps> = ({
             dir={language === 'ar' ? 'rtl' : 'ltr'}
             className="hidden lg:flex items-center justify-center gap-0.5 xl:gap-1.5 flex-1 min-w-0 px-2"
           >
-            {/* Creative Expanding 3-Section Workspace Dock */}
-            <div
-              role="group"
-              aria-label={isAr ? 'التبديل بين الأقسام' : 'Workspace Switcher'}
-              className="flex items-center gap-0.5 p-1 rounded-xl bg-slate-100/90 dark:bg-neutral-900/90 border border-slate-200/80 dark:border-neutral-800 shrink-0 me-1"
-            >
+            {/* Simple Unified Workspace Dropdown Selector */}
+            <div className="relative flex items-center shrink-0" ref={workspaceRef}>
               <button
                 type="button"
-                onClick={() => setActiveWorkspace(null)}
-                title={isAr ? 'بوابة الأقسام الرئيسية' : 'All Workspaces'}
-                aria-label={isAr ? 'بوابة الأقسام الرئيسية' : 'All Workspaces'}
-                className="p-1.5 rounded-lg text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/80 dark:hover:bg-neutral-800 transition-all duration-200 hover:scale-105 shrink-0"
+                onClick={() => {
+                  setWorkspaceDropdownOpen(v => !v);
+                  setArchiveDropdownOpen(false);
+                }}
+                aria-expanded={workspaceDropdownOpen}
+                aria-haspopup="menu"
+                title={currentDockItem.fullLabel}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-slate-50/80 dark:bg-neutral-900 text-xs font-bold text-slate-800 dark:text-white transition-colors whitespace-nowrap shrink-0 ${currentDockItem.triggerAccentClass}`}
               >
-                <LayoutGrid className="w-3.5 h-3.5" />
+                <CurrentDockIcon className={`w-4 h-4 shrink-0 ${currentDockItem.iconColorClass}`} />
+                <span>{currentDockItem.shortLabel}</span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
+                    workspaceDropdownOpen ? 'rotate-180 text-slate-700 dark:text-white' : ''
+                  }`}
+                />
               </button>
 
-              <span className="h-4 w-px bg-slate-200 dark:bg-neutral-800 mx-0.5" aria-hidden="true" />
+              {workspaceDropdownOpen && (
+                <div
+                  role="menu"
+                  className="absolute top-full start-0 mt-1.5 w-72 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-xl py-1.5 z-50"
+                >
+                  <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 dark:text-neutral-500">
+                    {isAr ? 'اختر القسم' : 'Select Workspace'}
+                  </div>
 
-              {workspaceDockItems.map(ws => {
-                const WsIcon = ws.icon;
-                const isActive = currentDockId === ws.id;
-                return (
+                  {workspaceDockItems.map(ws => {
+                    const WsIcon = ws.icon;
+                    const isActive = currentDockId === ws.id;
+                    return (
+                      <button
+                        key={ws.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveWorkspace(ws.id);
+                          setWorkspaceDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs text-start transition-colors ${
+                          isActive
+                            ? ws.activeRowClass
+                            : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${ws.tintBadgeClass}`}>
+                            <WsIcon className="w-4 h-4" />
+                          </span>
+                          <span className="truncate">{ws.fullLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-slate-400 tabular-nums">{ws.boxCount}</span>
+                          {isActive && <Check className="w-3.5 h-3.5 shrink-0" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  <div className="my-1.5 border-t border-slate-100 dark:border-neutral-800" />
+
                   <button
-                    key={ws.id}
                     type="button"
-                    onClick={() => setActiveWorkspace(ws.id)}
-                    title={`${ws.fullLabel} (${ws.boxCount} ${isAr ? 'بوكس' : 'boxes'})`}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={`group/ws relative flex items-center rounded-lg text-xs font-bold transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] whitespace-nowrap shrink-0 overflow-hidden ${
-                      isActive
-                        ? `gap-1.5 px-2.5 py-1.5 ${ws.activeClass}`
-                        : `gap-0 hover:gap-1.5 px-2 hover:px-2.5 py-1.5 text-slate-500 dark:text-neutral-400 ${ws.hoverClass}`
-                    }`}
+                    role="menuitem"
+                    onClick={() => {
+                      setActiveWorkspace(null);
+                      setWorkspaceDropdownOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900 hover:text-slate-900 dark:hover:text-white text-start transition-colors"
                   >
-                    <WsIcon className="w-3.5 h-3.5 shrink-0 transition-transform duration-300 group-hover/ws:scale-110" />
-                    <span
-                      className={`overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                        isActive
-                          ? 'max-w-[120px] opacity-100'
-                          : 'max-w-0 opacity-0 xl:group-hover/ws:max-w-[120px] xl:group-hover/ws:opacity-100'
-                      }`}
-                    >
-                      {ws.shortLabel}
-                    </span>
-                    {isActive && (
-                      <span
-                        className="absolute inset-x-2 bottom-0 h-[2px] rounded-full"
-                        style={{ backgroundColor: ws.accentHex }}
-                        aria-hidden="true"
-                      />
-                    )}
+                    <LayoutGrid className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>{isAr ? 'عرض جميع الأقسام' : 'All Workspaces Portal'}</span>
                   </button>
-                );
-              })}
+                </div>
+              )}
             </div>
+
+            <span className="h-5 w-px bg-slate-200 dark:bg-neutral-800 mx-1 shrink-0" aria-hidden="true" />
 
             <button
               type="button"
@@ -506,7 +562,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             </button>
 
             {(['System Admin', 'Archive Manager'].includes(currentUser.role) ||
-              (isMinutes && currentUser.role === 'Data Entry')) && (
+              ((isMinutes || isPallet) && currentUser.role === 'Data Entry')) && (
               <button
                 type="button"
                 onClick={() => onNavigate('import')}
@@ -632,44 +688,85 @@ export const TopNav: React.FC<TopNavProps> = ({
 
         {/* Tablet & Mobile Navigation Strip */}
         <div className="lg:hidden border-t border-slate-100 dark:border-neutral-800 py-2">
-          <div className="flex items-center gap-1 overflow-x-auto pb-1">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-100 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <div className="relative shrink-0" ref={mobileWorkspaceRef}>
               <button
                 type="button"
-                onClick={() => setActiveWorkspace(null)}
-                title={isAr ? 'بوابة الأقسام' : 'All Workspaces'}
-                className="p-1.5 rounded-md text-slate-500 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white shrink-0"
+                onClick={() => setWorkspaceDropdownOpen(v => !v)}
+                aria-expanded={workspaceDropdownOpen}
+                aria-haspopup="menu"
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-slate-50/80 dark:bg-neutral-900 text-xs font-bold text-slate-800 dark:text-white whitespace-nowrap shrink-0 transition-colors ${currentDockItem.triggerAccentClass}`}
               >
-                <LayoutGrid className="w-3.5 h-3.5" />
+                <CurrentDockIcon className={`w-3.5 h-3.5 shrink-0 ${currentDockItem.iconColorClass}`} />
+                <span>{currentDockItem.shortLabel}</span>
+                <ChevronDown
+                  className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${
+                    workspaceDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
               </button>
-              <span className="h-3.5 w-px bg-slate-200 dark:bg-neutral-800" aria-hidden="true" />
-              {workspaceDockItems.map(ws => {
-                const WsIcon = ws.icon;
-                const isActive = currentDockId === ws.id;
-                return (
+
+              {workspaceDropdownOpen && (
+                <div
+                  role="menu"
+                  className="absolute top-full start-0 mt-1.5 w-64 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl shadow-xl py-1.5 z-50"
+                >
+                  <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 dark:text-neutral-500">
+                    {isAr ? 'اختر القسم' : 'Select Workspace'}
+                  </div>
+                  {workspaceDockItems.map(ws => {
+                    const WsIcon = ws.icon;
+                    const isActive = currentDockId === ws.id;
+                    return (
+                      <button
+                        key={ws.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveWorkspace(ws.id);
+                          setWorkspaceDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-start transition-colors ${
+                          isActive
+                            ? ws.activeRowClass
+                            : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${ws.tintBadgeClass}`}>
+                            <WsIcon className="w-3.5 h-3.5" />
+                          </span>
+                          <span className="truncate">{ws.fullLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[11px] font-mono text-slate-400 tabular-nums">{ws.boxCount}</span>
+                          {isActive && <Check className="w-3.5 h-3.5 shrink-0" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
+
                   <button
-                    key={ws.id}
                     type="button"
-                    onClick={() => setActiveWorkspace(ws.id)}
-                    className={`relative flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold whitespace-nowrap shrink-0 transition-all overflow-hidden ${
-                      isActive
-                        ? ws.activeClass
-                        : 'text-slate-500 dark:text-neutral-400'
-                    }`}
+                    role="menuitem"
+                    onClick={() => {
+                      setActiveWorkspace(null);
+                      setWorkspaceDropdownOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900 text-start transition-colors"
                   >
-                    <WsIcon className="w-3.5 h-3.5 shrink-0" />
-                    {isActive && <span>{ws.shortLabel}</span>}
-                    {isActive && (
-                      <span
-                        className="absolute inset-x-1.5 bottom-0 h-[2px]"
-                        style={{ backgroundColor: ws.accentHex }}
-                        aria-hidden="true"
-                      />
-                    )}
+                    <LayoutGrid className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{isAr ? 'عرض جميع الأقسام' : 'All Workspaces Portal'}</span>
                   </button>
-                );
-              })}
+                </div>
+              )}
             </div>
+
+            <span className="h-4 w-px bg-slate-200 dark:bg-neutral-800 shrink-0" aria-hidden="true" />
+
+            <div className="flex items-center gap-1 overflow-x-auto pb-0.5 flex-1 min-w-0">
 
             <button
               onClick={() => onNavigate('dashboard')}
@@ -768,7 +865,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             </button>
 
             {(['System Admin', 'Archive Manager'].includes(currentUser.role) ||
-              (isMinutes && currentUser.role === 'Data Entry')) && (
+              ((isMinutes || isPallet) && currentUser.role === 'Data Entry')) && (
               <button
                 onClick={() => onNavigate('import')}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg shrink-0 transition-colors ${
@@ -781,6 +878,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                 <span>{language === 'ar' ? 'استيراد' : 'Import'}</span>
               </button>
             )}
+            </div>
           </div>
         </div>
       </div>

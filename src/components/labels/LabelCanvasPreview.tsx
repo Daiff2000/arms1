@@ -157,7 +157,7 @@ export const LabelVectorSvg: React.FC<LabelVectorSvgProps> = ({
             {data.boxCode}
           </text>
 
-          {/* "ARCHIVE BOX" bottom label */}
+          {/* Bottom label */}
           <text
             x="27.15"
             y="41.3"
@@ -168,7 +168,7 @@ export const LabelVectorSvg: React.FC<LabelVectorSvgProps> = ({
             fontWeight="800"
             letterSpacing="0.14em"
           >
-            ARCHIVE BOX
+            {data.subtitle || 'ARCHIVE BOX'}
           </text>
         </>
       ) : (

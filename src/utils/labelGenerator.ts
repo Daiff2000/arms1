@@ -91,7 +91,8 @@ export function getQRCodeText(data: LabelData): string {
   const fromVal = data.fromLabel || String(data.fromJobId);
   const toVal = data.toLabel || String(data.toJobId);
   if (data.type === 'box') {
-    return `BOX: ${data.boxCode}\nFROM: ${fromVal}\nTO: ${toVal}`;
+    const tag = data.subtitle && data.subtitle.toUpperCase().includes('DOSSIER') ? 'DOSSIER' : 'BOX';
+    return `${tag}: ${data.boxCode}\nFROM: ${fromVal}\nTO: ${toVal}`;
   } else {
     return `BOX: ${data.boxCode}\nDOSSIER: ${data.dossierNumber || 1}\nOF: ${data.totalDossiers || 6}\nFROM: ${fromVal}\nTO: ${toVal}`;
   }
@@ -201,10 +202,11 @@ export async function renderLabelOnPDF(pdf: jsPDF, data: LabelData) {
     pdf.setFontSize(42);
     pdf.text(data.boxCode, leftX + leftW / 2, 28.8, { align: 'center' });
 
-    // Lower section: "ARCHIVE BOX" bold
+    // Lower section: custom subtitle or "ARCHIVE BOX" bold
+    const footerText = (data.subtitle || 'ARCHIVE BOX').split('').join(' ');
     pdf.setFontSize(9.5);
     pdf.setFont('helvetica', 'bold');
-    pdf.text('A R C H I V E   B O X', leftX + leftW / 2, 41.3, { align: 'center' });
+    pdf.text(footerText, leftX + leftW / 2, 41.3, { align: 'center' });
   } else {
     // Dossier Label
     pdf.setTextColor(0, 0, 0);

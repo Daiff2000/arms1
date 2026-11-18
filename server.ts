@@ -338,7 +338,7 @@ function describePgError(error: unknown, fallback = 'Database operation failed.'
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
   app.use('/api', (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -384,6 +384,32 @@ async function startServer() {
           return res.json({ user: safeUser(u), setupRequired: false, storageMode: 'local' });
         }
         if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed.' });
+
+        if (body.action === 'update-profile') {
+          const session = readSession(req);
+          if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
+          const rawName = String(body.name ?? '').trim();
+          const rawUsername = String(body.username ?? '').trim().toLowerCase();
+          const rawEmail = String(body.email ?? '').trim().slice(0, 160);
+          if (!rawName || rawName.length > 120) {
+            return res.status(400).json({ error: 'يرجى إدخال اسم كامل صالح (بحد أقصى 120 حرفاً).' });
+          }
+          if (!rawUsername || rawUsername.length > 80 || /\s/.test(rawUsername)) {
+            return res.status(400).json({ error: 'يرجى إدخال اسم مستخدم صالح بدون مسافات.' });
+          }
+          const u = db.users.find(x => x.id === session.sub && x.active);
+          if (!u) return res.status(404).json({ error: 'الحساب غير موجود أو غير نشط.' });
+          if (db.users.some(x => x.id !== u.id && x.username === rawUsername)) {
+            return res.status(409).json({ error: 'اسم المستخدم مستخدم بالفعل.' });
+          }
+          u.name = rawName;
+          u.username = rawUsername;
+          u.email = rawEmail;
+          saveLocalDb(db);
+          const refreshed = createSession({ id: u.id, username: u.username });
+          setSessionCookie(req, res, refreshed.value, refreshed.maxAge);
+          return res.json({ user: safeUser(u), storageMode: 'local', sessionToken: refreshed.value });
+        }
 
         if (body.action === 'change-password') {
           const session = readSession(req);
@@ -474,6 +500,35 @@ async function startServer() {
         return res.status(201).json({ user: safeUser(inserted[0]), storageMode: 'postgres', sessionToken: session.value });
       }
 
+      if (body.action === 'update-profile') {
+        const session = readSession(req);
+        if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
+        const rawName = String(body.name ?? '').trim();
+        const rawUsername = String(body.username ?? '').trim().toLowerCase();
+        const rawEmail = String(body.email ?? '').trim().slice(0, 160);
+        if (!rawName || rawName.length > 120) {
+          return res.status(400).json({ error: 'يرجى إدخال اسم كامل صالح (بحد أقصى 120 حرفاً).' });
+        }
+        if (!rawUsername || rawUsername.length > 80 || /\s/.test(rawUsername)) {
+          return res.status(400).json({ error: 'يرجى إدخال اسم مستخدم صالح بدون مسافات.' });
+        }
+        const existing = await sql`SELECT id FROM arms_users WHERE username = ${rawUsername} AND id <> ${session.sub} LIMIT 1`;
+        if (existing.length > 0) {
+          return res.status(409).json({ error: 'اسم المستخدم مستخدم بالفعل.' });
+        }
+        const updated = await sql`UPDATE arms_users
+          SET name = ${rawName},
+              username = ${rawUsername},
+              email = ${rawEmail},
+              updated_at = NOW()
+          WHERE id = ${session.sub} AND active = TRUE
+          RETURNING id, username, email, name, role, active, last_login`;
+        if (!updated.length) return res.status(404).json({ error: 'الحساب غير موجود أو غير نشط.' });
+        const refreshed = createSession({ id: updated[0].id, username: updated[0].username });
+        setSessionCookie(req, res, refreshed.value, refreshed.maxAge);
+        return res.json({ user: safeUser(updated[0]), storageMode: 'postgres', sessionToken: refreshed.value });
+      }
+
       if (body.action === 'change-password') {
         const session = readSession(req);
         if (!session) return res.status(401).json({ error: 'يجب تسجيل الدخول أولاً.' });
@@ -511,7 +566,8 @@ async function startServer() {
       }
 
       return res.status(400).json({ error: 'Unknown authentication action.' });
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === '23505') return res.status(409).json({ error: 'اسم المستخدم مستخدم بالفعل.' });
       const info = describePgError(error, 'Authentication failed.');
       return res.status(info.status).json(info);
     }

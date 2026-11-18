@@ -22,6 +22,7 @@ import {
 } from '../types';
 import { buildBoxStructure } from '../utils/archiveCalculations';
 import { apiFetch, errorFrom, loadArchiveSnapshot, setSessionToken } from '../utils/archiveApi';
+import { deduplicatePalletReports } from '../utils/palletUtils';
 import {
   ArchiveScope,
   deleteUploadInOperationsStore,
@@ -105,6 +106,7 @@ interface ArchiveContextType {
   }) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  updateProfile: (updates: { name: string; username: string; email: string }) => Promise<User>;
   users: User[];
   boxes: Box[];
   dossiers: Dossier[];
@@ -119,7 +121,7 @@ interface ArchiveContextType {
   operationsArchive: WorkspaceArchiveStore;
   activeWorkspace: WorkspaceModule | null;
   setActiveWorkspace: (workspace: WorkspaceModule | null) => void;
-  savePalletReports: (next: PalletReport[]) => Promise<void>;
+  savePalletReports: (next: PalletReport[], nextUploadHistory?: UploadRecord[]) => Promise<void>;
   saveMinutesRecords: (next: MinutesRecord[]) => Promise<void>;
   language: 'ar' | 'en';
   setLanguage: (lang: 'ar' | 'en') => void;
@@ -267,8 +269,12 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
           minutesRecords?: MinutesRecord[];
           palletArchive?: WorkspaceArchiveStore;
           minutesArchive?: WorkspaceArchiveStore;
-        }>('/api/modules', {}, 15000).catch(() => null),
+          error?: string;
+        }>('/api/modules', {}, 15000),
       ]);
+      if (!modulesResult.ok || !modulesResult.body) {
+        throw new Error(errorFrom(modulesResult, 'تعذر تحميل بيانات الأقسام'));
+      }
       skipNextSaveRef.current = true;
       dirtyModulesRef.current = { palletArchive: false, minutesArchive: false };
       setOpBoxes(parsed.boxes || []);
@@ -277,17 +283,29 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setOpUploadHistory(parsed.uploadHistory || []);
       setOpNotifications(parsed.notifications || []);
       setAuditLogs(parsed.auditLogs || []);
-      if (modulesResult?.ok && modulesResult.body) {
-        setPalletReports(Array.isArray(modulesResult.body.palletReports) ? modulesResult.body.palletReports : []);
-        setMinutesRecords(Array.isArray(modulesResult.body.minutesRecords) ? modulesResult.body.minutesRecords : []);
-        setPalletArchive(normalizeWorkspaceStore(modulesResult.body.palletArchive));
-        setMinutesArchive(normalizeMinutesArchiveStore(modulesResult.body.minutesArchive));
-      }
+      const rawPalletReports = Array.isArray(modulesResult.body.palletReports) ? modulesResult.body.palletReports : [];
+      const { records: cleanPalletReports, removedCount: removedPalletDupes } = deduplicatePalletReports(rawPalletReports);
+      setPalletReports(cleanPalletReports);
+      setMinutesRecords(Array.isArray(modulesResult.body.minutesRecords) ? modulesResult.body.minutesRecords : []);
+      setPalletArchive(normalizeWorkspaceStore(modulesResult.body.palletArchive));
+      setMinutesArchive(normalizeMinutesArchiveStore(modulesResult.body.minutesArchive));
       setCurrentUser(parsed.currentUser || guestUser);
       setUsers(parsed.users || (parsed.currentUser ? [parsed.currentUser] : []));
       revisionRef.current = Number(parsed._revision || 0);
       setAuthenticated(Boolean(parsed.currentUser));
       setHydrated(true);
+
+      if (
+        removedPalletDupes > 0 &&
+        parsed.currentUser &&
+        ['System Admin', 'Archive Manager', 'Data Entry'].includes(parsed.currentUser.role)
+      ) {
+        void apiFetch('/api/modules', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ palletReports: cleanPalletReports }),
+        }).catch(() => undefined);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'تعذر تحميل بيانات الأرشيف.';
       setArchiveLoadError(message);
@@ -370,6 +388,30 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!r.ok) throw new Error(errorFrom(r, 'تعذر تغيير كلمة المرور'));
   };
 
+  const updateProfile = async (updates: { name: string; username: string; email: string }) => {
+    const r = await apiFetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update-profile', ...updates }),
+    });
+    if (!r.ok || !r.body?.user) throw new Error(errorFrom(r, 'تعذر تحديث بيانات الحساب'));
+    if (typeof r.body.sessionToken === 'string' && r.body.sessionToken) {
+      setSessionToken(r.body.sessionToken);
+    }
+    const updatedUser: User = r.body.user;
+    setCurrentUser(updatedUser);
+    setUsers(prev => prev.map(u => (u.id === updatedUser.id ? updatedUser : u)));
+    if (['System Admin', 'Archive Manager'].includes(updatedUser.role)) {
+      addAuditLog(
+        'Update User',
+        'User',
+        updatedUser.id,
+        `Updated own profile: name="${updatedUser.name}", username="@${updatedUser.username}", email="${updatedUser.email}"`
+      );
+    }
+    return updatedUser;
+  };
+
   const logout = async () => {
     try {
       await apiFetch(
@@ -399,16 +441,33 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setHydrated(false);
   };
 
-  const savePalletReports = async (next: PalletReport[]) => {
+  const savePalletReports = async (next: PalletReport[], nextUploadHistory?: UploadRecord[]) => {
     const previous = palletReports;
-    setPalletReports(next);
+    const previousArchive = palletArchive;
+    const { records: dedupedNext } = deduplicatePalletReports(next);
+    const nextArchive = nextUploadHistory
+      ? { ...palletArchive, uploadHistory: nextUploadHistory }
+      : palletArchive;
+
+    setPalletReports(dedupedNext);
+    if (nextUploadHistory) {
+      dirtyModulesRef.current.palletArchive = false;
+      setPalletArchive(nextArchive);
+    }
+
+    const payload: Record<string, unknown> = { palletReports: dedupedNext };
+    if (nextUploadHistory) {
+      payload.palletArchive = nextArchive;
+    }
+
     const r = await apiFetch('/api/modules', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ palletReports: next }),
+      body: JSON.stringify(payload),
     });
     if (!r.ok) {
       setPalletReports(previous);
+      if (nextUploadHistory) setPalletArchive(previousArchive);
       const msg = errorFrom(r, language === 'ar' ? 'تعذر حفظ تقارير الباليت' : 'Failed saving pallet reports');
       showToast(msg, 'error');
       throw new Error(msg);
@@ -625,8 +684,76 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return true;
     }
 
-    const moduleKey = scope === 'pallet' ? 'palletArchive' : 'minutesArchive';
-    const currentStore = scope === 'pallet' ? palletArchive : minutesArchive;
+    if (scope === 'pallet') {
+      const targetUpload = palletArchive.uploadHistory.find(u => u.id === uploadId);
+      const remainingReportsRaw = palletReports.filter(r => r.uploadId !== uploadId);
+      const deletedReportsCount = palletReports.length - remainingReportsRaw.length;
+      const totals = new Map<string, number>();
+      remainingReportsRaw.forEach(r => {
+        const key = `${r.palletCode}|${r.deliveryDate || r.inspectionDate}`;
+        totals.set(key, (totals.get(key) || 0) + (r.boxesCount || r.boxCount || 0));
+      });
+      const remainingReports = remainingReportsRaw.map(r => {
+        const total = totals.get(`${r.palletCode}|${r.deliveryDate || r.inspectionDate}`) || 0;
+        return {
+          ...r,
+          palletTotalBoxes: total,
+          capacityStatus: (total > 36 ? 'over-capacity' : 'normal') as 'over-capacity' | 'normal',
+        };
+      });
+
+      const wsResult = deleteUploadInWorkspaceStore(palletArchive, uploadId);
+      const nextPalletArchive: WorkspaceArchiveStore = wsResult
+        ? wsResult.nextStore
+        : {
+            ...palletArchive,
+            uploadHistory: palletArchive.uploadHistory.filter(u => u.id !== uploadId),
+          };
+
+      if (!targetUpload && deletedReportsCount === 0 && !wsResult) return false;
+
+      const r = await apiFetch(
+        '/api/modules',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            palletReports: remainingReports,
+            palletArchive: nextPalletArchive,
+          }),
+        },
+        30000
+      );
+
+      if (!r.ok) {
+        showToast(errorFrom(r, language === 'ar' ? 'تعذر حذف الرفعة من قاعدة البيانات' : 'Failed deleting upload'), 'error');
+        return false;
+      }
+
+      dirtyModulesRef.current.palletArchive = false;
+      setPalletReports(remainingReports);
+      setPalletArchive(nextPalletArchive);
+
+      const deletedCount = deletedReportsCount || wsResult?.deletedProjectsCount || 0;
+      const fileLabel = targetUpload?.fileName || uploadId;
+      addAuditLog(
+        'Delete Upload Batch',
+        'Import',
+        uploadId,
+        `[pallet] Deleted upload "${fileLabel}" (${deletedCount} records)`
+      );
+
+      showToast(
+        language === 'ar'
+          ? `تم مسح الرفعة "${fileLabel}" (${deletedCount} سجل) من ${scopeLabelAr} بنجاح.`
+          : `Deleted upload "${fileLabel}" (${deletedCount} records) successfully.`,
+        'success'
+      );
+      return true;
+    }
+
+    const moduleKey = 'minutesArchive';
+    const currentStore = minutesArchive;
     const result = deleteUploadInWorkspaceStore(currentStore, uploadId);
     if (!result) return false;
 
@@ -646,8 +773,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     dirtyModulesRef.current[moduleKey] = false;
-    if (scope === 'pallet') setPalletArchive(result.nextStore);
-    else setMinutesArchive(result.nextStore);
+    setMinutesArchive(result.nextStore);
 
     addAuditLog(
       'Delete Upload Batch',
@@ -1755,6 +1881,7 @@ export const ArchiveProvider: React.FC<{ children: React.ReactNode }> = ({ child
         login,
         logout,
         changePassword,
+        updateProfile,
         users,
         boxes,
         dossiers,

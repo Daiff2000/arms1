@@ -83,15 +83,62 @@ export const DeleteUploadModal: React.FC<DeleteUploadModalProps> = ({
   const extraRecordsCount =
     scope === 'pallet' ? palletReports.length : scope === 'minutes' ? minutesRecords.length : 0;
 
-  const importedCount = useMemo(
-    () => store.projects.filter(isImportedProject).length,
-    [store.projects]
-  );
+  const importedCount = useMemo(() => {
+    if (scope === 'pallet' && palletReports.length > 0) return palletReports.length;
+    return store.projects.filter(isImportedProject).length;
+  }, [scope, palletReports.length, store.projects]);
 
-  const previews: UploadDeletionPreview[] = useMemo(
-    () => store.uploadHistory.map(u => getUploadDeletionPreview(scope, store, u)),
-    [scope, store]
-  );
+  const boxesSummaryCount = useMemo(() => {
+    if (scope === 'pallet' && palletReports.length > 0) {
+      return new Set(palletReports.map(r => r.palletCode).filter(Boolean)).size;
+    }
+    return store.boxes.length;
+  }, [scope, palletReports, store.boxes.length]);
+
+  const previews: UploadDeletionPreview[] = useMemo(() => {
+    if (scope === 'pallet' && palletReports.length > 0) {
+      const historyMap = new Map(store.uploadHistory.map(u => [u.id, u]));
+      const grouped = new Map<string, typeof palletReports>();
+      for (const r of palletReports) {
+        const uid = r.uploadId || 'legacy-pallet-upload';
+        grouped.set(uid, [...(grouped.get(uid) || []), r]);
+      }
+
+      const combinedUploads = [...store.uploadHistory];
+      for (const [uid, rows] of grouped.entries()) {
+        if (!historyMap.has(uid)) {
+          combinedUploads.push({
+            id: uid,
+            fileName: rows[0]?.sourceSheet ? `Pallet Import (${rows[0].sourceSheet})` : 'Pallet Import Batch',
+            userName: rows[0]?.createdBy || 'System',
+            timestamp: rows[0]?.createdAt || '',
+            totalRows: rows.length,
+            importedCount: rows.length,
+            duplicateCount: 0,
+            rejectedCount: 0,
+            errors: [],
+            status: 'Completed',
+          });
+        }
+      }
+
+      return combinedUploads.map(u => {
+        const matchedRows = grouped.get(u.id) || [];
+        const matchedIds = new Set(matchedRows.map(r => r.id));
+        const affectedPallets = Array.from(new Set(matchedRows.map(r => r.palletCode).filter(Boolean))).sort();
+        const palletsToRemove = affectedPallets.filter(
+          code => !palletReports.some(r => r.palletCode === code && !matchedIds.has(r.id))
+        ).length;
+        return {
+          upload: u,
+          matchedProjectsCount: matchedRows.length,
+          affectedBoxCodes: affectedPallets,
+          boxesToRemoveCount: palletsToRemove,
+        };
+      });
+    }
+    return store.uploadHistory.map(u => getUploadDeletionPreview(scope, store, u));
+  }, [scope, store, palletReports]);
 
   const selectedPreview = useMemo(() => {
     if (!confirmTarget || confirmTarget.type !== 'upload') return null;
@@ -208,9 +255,11 @@ export const DeleteUploadModal: React.FC<DeleteUploadModalProps> = ({
                 </div>
                 <div>
                   <div className="text-base font-extrabold text-slate-900 dark:text-white tabular-nums">
-                    {store.boxes.length}
+                    {boxesSummaryCount}
                   </div>
-                  <div className="text-[11px] text-slate-500">{isAr ? 'البوكسات الحالية' : 'Boxes'}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {scope === 'pallet' ? (isAr ? 'الباليتات الحالية' : 'Pallets') : isAr ? 'البوكسات الحالية' : 'Boxes'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-base font-extrabold text-slate-900 dark:text-white tabular-nums">
@@ -312,7 +361,11 @@ export const DeleteUploadModal: React.FC<DeleteUploadModalProps> = ({
                       {isAr ? 'مسح جميع بيانات القسم بالكامل (كل الرفعات)' : 'Clear Entire Section Data (All Uploads)'}
                     </div>
                     <div className="text-[11px] text-slate-600 dark:text-neutral-400">
-                      {isAr
+                      {scope === 'pallet'
+                        ? isAr
+                          ? `يحذف كل الباليتات (${boxesSummaryCount}) والسجلات (${importedCount}) في ${meta.name} فقط.`
+                          : `Deletes all ${boxesSummaryCount} pallets and ${importedCount} records in ${meta.name} only.`
+                        : isAr
                         ? `يحذف كل البوكسات (${store.boxes.length}) والسجلات (${store.projects.length}) في ${meta.name} فقط.`
                         : `Deletes all ${store.boxes.length} boxes and ${store.projects.length} records in ${meta.name} only.`}
                     </div>
@@ -372,7 +425,11 @@ export const DeleteUploadModal: React.FC<DeleteUploadModalProps> = ({
                         {isAr ? `تصفير قسم "${meta.name}" بالكامل` : `Wipe All Data in "${meta.name}"`}
                       </div>
                       <p className="leading-relaxed">
-                        {isAr
+                        {scope === 'pallet'
+                          ? isAr
+                            ? `سيتم حذف جميع السجلات (${importedCount}) والباليتات (${boxesSummaryCount}) وسجل الرفعات (${previews.length}) من قاعدة بيانات هذا القسم نهائياً.`
+                            : `This will permanently delete all ${importedCount} records, ${boxesSummaryCount} pallets, and ${previews.length} upload entries from this section.`
+                          : isAr
                           ? `سيتم حذف جميع البوكسات (${store.boxes.length}) والدوسيهات (${store.dossiers.length}) والسجلات (${store.projects.length}) وسجل الرفعات (${store.uploadHistory.length}) من قاعدة بيانات هذا القسم نهائياً.`
                           : `This will permanently delete all ${store.boxes.length} boxes, ${store.dossiers.length} dossiers, ${store.projects.length} records, and ${store.uploadHistory.length} upload entries from this section.`}
                       </p>
