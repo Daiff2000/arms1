@@ -2,15 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   ArrowRight,
   Calendar,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   FileSpreadsheet,
+  FileText,
   Filter,
   FolderArchive,
+  Layers,
+  Package,
   Plus,
   Printer,
   RotateCcw,
@@ -33,6 +39,13 @@ import {
 import { formatShortLabelDate } from '../../utils/labelGenerator';
 import { weekEndOf, weekStartOf } from '../../utils/minutesPlan';
 import { palletRecordDedupKey, recomputePalletCapacities } from '../../utils/palletUtils';
+import {
+  buildPalletBoxPlan,
+  PalletBoxItem,
+  PalletDossierItem,
+  PalletGroupItem,
+  safeMonthLabel as safeMonthLabelHelper,
+} from '../../utils/palletArchivePlan';
 
 const normalize = (value: unknown) =>
   String(value ?? '')
@@ -166,26 +179,13 @@ export const excelDate = (value: unknown): string => {
   return '';
 };
 
-export const safeMonthLabel = (key: string, isAr = true): string => {
-  if (!key) return isAr ? 'بدون تاريخ' : 'No Date';
-  const match = /^(\d{4})-(\d{1,2})$/.exec(key.trim());
-  if (!match) return key;
-  const y = Number(match[1]);
-  const m = Number(match[2]);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return key;
-  const dt = new Date(y, m - 1, 1);
-  if (Number.isNaN(dt.getTime())) return key;
-  try {
-    return new Intl.DateTimeFormat(isAr ? 'ar-EG' : 'en-US', { month: 'long', year: 'numeric' }).format(dt);
-  } catch {
-    return key;
-  }
-};
+export const safeMonthLabel = safeMonthLabelHelper;
 
 export interface PalletMonthlyDossier {
   dossierNumber: number;
-  dossierCode: string; // P1, P2, P3... starting chronologically from oldest/first month
-  monthKey: string; // e.g. 2026-01
+  dossierCode: string; // P10-1, P10-2...
+  boxCode: string;
+  monthKey: string; // e.g. 2025-08
   minDate: string; // YYYY-MM-DD
   maxDate: string; // YYYY-MM-DD
   rows: PalletReport[];
@@ -195,63 +195,21 @@ export interface PalletMonthlyDossier {
 }
 
 /**
- * Groups pallet handover records into chronological monthly dossiers (P1, P2, P3...)
- * ordered ascending from the earliest month (e.g., Month 1 -> P1, Month 2 -> P2).
+ * Legacy compatibility wrapper returning filled monthly dossiers from the unified Box P10+ plan.
  */
 export function buildPalletMonthlyDossiers(reports: PalletReport[]): PalletMonthlyDossier[] {
-  const monthMap = new Map<string, PalletReport[]>();
-  for (const r of reports) {
-    const dt = r.deliveryDate || r.inspectionDate || '';
-    const mKey = r.archiveMonth || (dt.length >= 7 ? dt.slice(0, 7) : '');
-    monthMap.set(mKey, [...(monthMap.get(mKey) || []), r]);
-  }
-
-  // Sort chronologically ascending (oldest month first: P1, P2, P3...; empty month key last)
-  const sortedKeys = Array.from(monthMap.keys()).sort((a, b) => {
-    if (!a && !b) return 0;
-    if (!a) return 1;
-    if (!b) return -1;
-    return a.localeCompare(b);
-  });
-
-  return sortedKeys.map((monthKey, idx) => {
-    const rows = [...(monthMap.get(monthKey) || [])].sort((a, b) => {
-      const da = a.deliveryDate || a.inspectionDate || '';
-      const db = b.deliveryDate || b.inspectionDate || '';
-      return da.localeCompare(db) || a.palletCode.localeCompare(b.palletCode);
-    });
-    let minDate = '';
-    let maxDate = '';
-    let totalBoxes = 0;
-    const palletSet = new Set<string>();
-    const overSet = new Set<string>();
-
-    for (const r of rows) {
-      const dt = (r.deliveryDate || r.inspectionDate || '').slice(0, 10);
-      if (dt) {
-        if (!minDate || dt < minDate) minDate = dt;
-        if (!maxDate || dt > maxDate) maxDate = dt;
-      }
-      totalBoxes += r.boxesCount || r.boxCount || 0;
-      if (r.palletCode) palletSet.add(r.palletCode);
-      if (r.capacityStatus === 'over-capacity') {
-        overSet.add(`${r.palletCode}|${dt}`);
-      }
-    }
-
-    const num = idx + 1;
-    return {
-      dossierNumber: num,
-      dossierCode: `P${num}`,
-      monthKey,
-      minDate,
-      maxDate,
-      rows,
-      totalBoxes,
-      palletsCount: palletSet.size,
-      overCapacityCount: overSet.size,
-    };
-  });
+  return buildPalletBoxPlan(reports).filledDossiers.map(d => ({
+    dossierNumber: d.dossierNumber,
+    dossierCode: d.dossierCode,
+    boxCode: d.boxCode,
+    monthKey: d.monthKey,
+    minDate: d.minDate,
+    maxDate: d.maxDate,
+    rows: d.rows,
+    totalBoxes: d.totalBoxes,
+    palletsCount: d.palletsCount,
+    overCapacityCount: d.overCapacityCount,
+  }));
 }
 
 const recomputeCapacities = recomputePalletCapacities;
@@ -261,6 +219,11 @@ const PAGE_SIZE = 50;
 
 interface Props {
   mode: 'import' | 'archive';
+  activeTab?: ActiveTab;
+  selectedBoxId?: string;
+  selectedDossierId?: string;
+  onSelectBox?: (boxId: string) => void;
+  onSelectDossier?: (dossierId: string) => void;
   onNavigate: (tab: ActiveTab, param?: string) => void;
   dateFrom?: string;
   dateTo?: string;
@@ -272,6 +235,11 @@ interface Props {
 
 export const PalletHandoverViews: React.FC<Props> = ({
   mode,
+  activeTab = 'archive',
+  selectedBoxId,
+  selectedDossierId,
+  onSelectBox,
+  onSelectDossier,
   onNavigate,
   dateFrom: controlledDateFrom,
   dateTo: controlledDateTo,
@@ -298,8 +266,12 @@ export const PalletHandoverViews: React.FC<Props> = ({
   const [duplicatePreviewCount, setDuplicatePreviewCount] = useState(0);
   const [scannedSheetNames, setScannedSheetNames] = useState<string[]>([]);
 
-  // Archive navigation & pagination state
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
+  // 4-Level Archive Navigation & Filter state
+  const [archiveSubTab, setArchiveSubTab] = useState<'boxes' | 'dossiers' | 'pallets' | 'records'>('boxes');
+  const [dossierDetailView, setDossierDetailView] = useState<'pallets' | 'records'>('pallets');
+  const [expandedPalletIds, setExpandedPalletIds] = useState<Record<string, boolean>>({});
+  const [boxFilter, setBoxFilter] = useState<string>('all');
+  const [selectedDossierFilter, setSelectedDossierFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [localDateFrom, setLocalDateFrom] = useState('');
   const [localDateTo, setLocalDateTo] = useState('');
@@ -365,7 +337,8 @@ export const PalletHandoverViews: React.FC<Props> = ({
     setDateFrom('');
     setDateTo('');
     setStatusFilter('all');
-    setSelectedMonthKey(null);
+    setBoxFilter('all');
+    setSelectedDossierFilter('all');
     setPage(1);
   };
 
@@ -381,25 +354,32 @@ export const PalletHandoverViews: React.FC<Props> = ({
   const [manualDeliveredBy, setManualDeliveredBy] = useState('');
   const [manualStatus, setManualStatus] = useState('');
 
-  const dossiers = useMemo(() => buildPalletMonthlyDossiers(palletReports), [palletReports]);
+  const plan = useMemo(() => buildPalletBoxPlan(palletReports), [palletReports]);
 
-  const dossierByMonth = useMemo(() => {
-    const map = new Map<string, PalletMonthlyDossier>();
-    for (const d of dossiers) map.set(d.monthKey, d);
+  const boxByCode = useMemo(() => {
+    const map = new Map<string, PalletBoxItem>();
+    for (const b of plan.boxes) map.set(b.boxCode, b);
     return map;
-  }, [dossiers]);
+  }, [plan.boxes]);
+
+  const dossierById = useMemo(() => {
+    const map = new Map<string, PalletDossierItem>();
+    for (const d of plan.dossiers) map.set(d.id, d);
+    return map;
+  }, [plan.dossiers]);
 
   // Reset pagination whenever view filters change
   useEffect(() => {
     setPage(1);
-  }, [selectedMonthKey, search, statusFilter, dateFrom, dateTo]);
+  }, [activeTab, archiveSubTab, selectedBoxId, selectedDossierId, boxFilter, selectedDossierFilter, search, statusFilter, dateFrom, dateTo]);
 
-  // Clear selectedMonthKey if that month no longer exists after deletion
   useEffect(() => {
-    if (selectedMonthKey !== null && !dossierByMonth.has(selectedMonthKey)) {
-      setSelectedMonthKey(null);
+    if (activeTab === 'boxes') setArchiveSubTab('boxes');
+    else if (activeTab === 'dossiers') setArchiveSubTab('dossiers');
+    else if (activeTab === 'projects') {
+      setArchiveSubTab(prev => (prev === 'records' ? 'records' : 'pallets'));
     }
-  }, [selectedMonthKey, dossierByMonth]);
+  }, [activeTab]);
 
   const handleFile = async (file?: File) => {
     if (!file || busy) return;
@@ -812,25 +792,119 @@ export const PalletHandoverViews: React.FC<Props> = ({
     return true;
   };
 
-  const activeDossier = selectedMonthKey !== null ? dossierByMonth.get(selectedMonthKey) || null : null;
-  const searchActive =
-    search.trim().length > 0 || statusFilter !== 'all' || Boolean(dateFrom) || Boolean(dateTo);
-  const showTableMode = activeDossier !== null || searchActive;
+  const activeBox: PalletBoxItem | null =
+    activeTab === 'box-detail'
+      ? boxByCode.get(selectedBoxId || '') || plan.boxes[0] || null
+      : null;
+
+  const activeDossier: PalletDossierItem | null =
+    activeTab === 'dossier-detail'
+      ? dossierById.get(selectedDossierId || '') || plan.filledDossiers[0] || plan.dossiers[0] || null
+      : null;
 
   const activeRows = useMemo(() => {
-    const base = activeDossier ? activeDossier.rows : palletReports;
+    let base = palletReports;
+    if (activeTab === 'dossier-detail' && activeDossier) {
+      base = activeDossier.rows;
+    } else if (activeTab === 'box-detail' && activeBox) {
+      base = activeBox.dossiers.flatMap(d => d.rows);
+    }
     const q = search.trim().toLowerCase();
     return base.filter(r => {
+      const meta = plan.rowMetaById.get(r.id);
+      if (boxFilter !== 'all' && meta?.boxCode !== boxFilter) return false;
+      if (selectedDossierFilter !== 'all' && meta?.dossierId !== selectedDossierFilter) return false;
       const dt = r.deliveryDate || r.inspectionDate || '';
       if (!matchesDateRange(dt)) return false;
       if (statusFilter !== 'all' && (r.capacityStatus || 'normal') !== statusFilter) return false;
       if (!q) return true;
-      const monthKey = r.archiveMonth || (dt.length >= 7 ? dt.slice(0, 7) : '');
-      const dCode = dossierByMonth.get(monthKey)?.dossierCode || '';
-      const text = `${dCode} ${r.palletCode} ${r.jobCode || r.linkedBoxes} ${r.deliveredBy || r.custodian} ${r.deliveryStatus || ''} ${r.sourceSheet || ''} ${dt}`.toLowerCase();
+      const text = `${meta?.boxCode || ''} ${meta?.dossierId || ''} ${r.palletCode} ${r.jobCode || r.linkedBoxes} ${r.deliveredBy || r.custodian} ${r.deliveryStatus || ''} ${r.sourceSheet || ''} ${dt}`.toLowerCase();
       return text.includes(q);
     });
-  }, [activeDossier, palletReports, search, statusFilter, dateFrom, dateTo, dossierByMonth]);
+  }, [
+    palletReports,
+    activeTab,
+    activeDossier,
+    activeBox,
+    plan.rowMetaById,
+    boxFilter,
+    selectedDossierFilter,
+    search,
+    statusFilter,
+    dateFrom,
+    dateTo,
+  ]);
+
+  const filteredPallets: PalletGroupItem[] = useMemo(() => {
+    let base: PalletGroupItem[] = plan.pallets;
+    if (activeTab === 'dossier-detail' && activeDossier) {
+      base = activeDossier.pallets;
+    } else if (activeTab === 'box-detail' && activeBox) {
+      base = activeBox.dossiers.flatMap(d => d.pallets);
+    }
+    const q = search.trim().toLowerCase();
+    return base.filter(p => {
+      if (boxFilter !== 'all' && p.boxCode !== boxFilter) return false;
+      if (selectedDossierFilter !== 'all' && p.dossierId !== selectedDossierFilter) return false;
+      if (!matchesDateRange(p.deliveryDate)) return false;
+      if (statusFilter !== 'all' && p.capacityStatus !== statusFilter) return false;
+      if (!q) return true;
+      const text = `${p.boxCode} ${p.dossierId} ${p.palletCode} ${p.jobCodes.join(' ')} ${p.deliveredBy} ${p.deliveryStatus} ${p.deliveryDate}`.toLowerCase();
+      return text.includes(q);
+    });
+  }, [plan.pallets, activeTab, activeDossier, activeBox, boxFilter, selectedDossierFilter, search, statusFilter, dateFrom, dateTo]);
+
+  const filteredBoxes: PalletBoxItem[] = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return plan.boxes.filter(b => {
+      if (boxFilter !== 'all' && b.boxCode !== boxFilter) return false;
+      if (statusFilter === 'over-capacity' && b.overCapacityCount === 0) return false;
+      if (statusFilter === 'normal' && b.overCapacityCount > 0) return false;
+      if (dateFrom && b.periodEnd < dateFrom) return false;
+      if (dateTo && b.periodStart > dateTo) return false;
+      if (!q) return true;
+      return (
+        b.boxCode.toLowerCase().includes(q) ||
+        b.dossiers.some(
+          d =>
+            d.id.toLowerCase().includes(q) ||
+            safeMonthLabelHelper(d.monthKey, true).toLowerCase().includes(q) ||
+            safeMonthLabelHelper(d.monthKey, false).toLowerCase().includes(q) ||
+            d.pallets.some(
+              p =>
+                p.palletCode.toLowerCase().includes(q) ||
+                p.jobCodes.some(j => j.toLowerCase().includes(q)) ||
+                p.deliveredBy.toLowerCase().includes(q)
+            )
+        )
+      );
+    });
+  }, [plan.boxes, boxFilter, statusFilter, dateFrom, dateTo, search]);
+
+  const filteredDossiers: PalletDossierItem[] = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return plan.dossiers.filter(d => {
+      if (boxFilter !== 'all' && d.boxCode !== boxFilter) return false;
+      if (selectedDossierFilter !== 'all' && d.id !== selectedDossierFilter) return false;
+      if (statusFilter === 'over-capacity' && d.overCapacityCount === 0) return false;
+      if (statusFilter === 'normal' && d.overCapacityCount > 0) return false;
+      if (dateFrom && d.periodEnd < dateFrom) return false;
+      if (dateTo && d.periodStart > dateTo) return false;
+      if (!q) return true;
+      return (
+        d.id.toLowerCase().includes(q) ||
+        d.boxCode.toLowerCase().includes(q) ||
+        safeMonthLabelHelper(d.monthKey, true).toLowerCase().includes(q) ||
+        safeMonthLabelHelper(d.monthKey, false).toLowerCase().includes(q) ||
+        d.pallets.some(
+          p =>
+            p.palletCode.toLowerCase().includes(q) ||
+            p.jobCodes.some(j => j.toLowerCase().includes(q)) ||
+            p.deliveredBy.toLowerCase().includes(q)
+        )
+      );
+    });
+  }, [plan.dossiers, boxFilter, selectedDossierFilter, statusFilter, dateFrom, dateTo, search]);
 
   const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -840,15 +914,15 @@ export const PalletHandoverViews: React.FC<Props> = ({
   );
 
   const handleExportFilteredExcel = () => {
-    const sourceRows = showTableMode ? activeRows : palletReports;
+    const sourceRows = activeRows.length > 0 ? activeRows : palletReports;
     if (!sourceRows.length) return;
     const rows = sourceRows.map((r, idx) => {
       const dt = r.deliveryDate || r.inspectionDate || '';
-      const mKey = r.archiveMonth || (dt.length >= 7 ? dt.slice(0, 7) : '');
-      const dCode = dossierByMonth.get(mKey)?.dossierCode || '—';
+      const meta = plan.rowMetaById.get(r.id);
       return {
         '#': idx + 1,
-        Dossier: dCode,
+        Box: meta?.boxCode || '—',
+        Dossier: meta?.dossierId || '—',
         Pallet: r.palletCode,
         'Job Code': r.jobCode || r.linkedBoxes,
         Boxes: r.boxesCount || r.boxCount || 0,
@@ -856,14 +930,14 @@ export const PalletHandoverViews: React.FC<Props> = ({
         'Delivered By': r.deliveredBy || r.custodian || '—',
         'Delivery Status': r.deliveryStatus || '—',
         Capacity: r.capacityStatus === 'over-capacity' ? 'Over 36 Boxes' : 'Normal',
-        Month: mKey,
+        Month: meta?.monthKey || r.archiveMonth || '',
         Sheet: r.sourceSheet || '—',
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Pallet Archive');
-    const suffix = activeDossier ? activeDossier.dossierCode : 'All';
+    const suffix = activeDossier ? activeDossier.id : activeBox ? activeBox.boxCode : 'All';
     XLSX.writeFile(wb, `ARMS_Pallet_${suffix}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     showToast(isAr ? 'تم تصدير ملف Excel بنجاح.' : 'Excel exported successfully.', 'success');
   };
@@ -879,11 +953,6 @@ export const PalletHandoverViews: React.FC<Props> = ({
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
               {isAr ? 'استيراد تسليم الباليت' : 'Import Pallet Deliveries'}
             </h1>
-            <p className="text-xs text-slate-500 mt-1">
-              {isAr
-                ? 'قراءة جميع الشيتات التي تحتوي على أعمدة الباليت والتاريخ وكود المشروع وعدد البوكسات.'
-                : 'Reads every worksheet containing the required pallet delivery columns.'}
-            </p>
           </div>
           <div className="flex items-center gap-2">
             {isSystemAdmin && (palletReports.length > 0 || palletArchive.uploadHistory.length > 0) && (
@@ -964,9 +1033,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
               : 'Choose or drop an Excel file'}
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            {isAr
-              ? 'الأعمدة المدعومة: Pallet · Date / Data · Job Code · No Boxes · USER NAME FILE TRAIL (سلم الباليت) · FILE TRAIL.'
-              : 'Supported columns: Pallet · Date / Data · Job Code · No Boxes · USER NAME FILE TRAIL · FILE TRAIL.'}
+            .xlsx · .xlsm · .xls · .csv
           </p>
         </label>
 
@@ -1156,6 +1223,351 @@ export const PalletHandoverViews: React.FC<Props> = ({
     );
   }
 
+  const openBox = (boxCode: string) => {
+    onSelectBox?.(boxCode);
+    onNavigate('box-detail', boxCode);
+  };
+
+  const openDossier = (dossier: PalletDossierItem) => {
+    onSelectBox?.(dossier.boxCode);
+    onSelectDossier?.(dossier.id);
+    onNavigate('dossier-detail', dossier.id);
+  };
+
+  const togglePalletExpand = (palletId: string) => {
+    setExpandedPalletIds(prev => ({ ...prev, [palletId]: !prev[palletId] }));
+  };
+
+  const effectiveMode: 'boxes' | 'box-detail' | 'dossiers' | 'dossier-detail' | 'pallets' | 'records' =
+    activeTab === 'box-detail'
+      ? 'box-detail'
+      : activeTab === 'dossier-detail'
+      ? 'dossier-detail'
+      : activeTab === 'boxes'
+      ? 'boxes'
+      : activeTab === 'dossiers'
+      ? 'dossiers'
+      : activeTab === 'projects'
+      ? archiveSubTab === 'records'
+        ? 'records'
+        : 'pallets'
+      : archiveSubTab;
+
+  const renderPalletsList = (palletsList: PalletGroupItem[], showContextBadge = true) => {
+    if (palletsList.length === 0) {
+      return (
+        <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl py-12 text-center text-xs text-slate-400">
+          {isAr ? 'لا توجد باليتات مطابقة للتصفية الحالية' : 'No matching pallets'}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {palletsList.map(p => {
+          const isExpanded = Boolean(expandedPalletIds[p.id]);
+          const capacityPct = Math.min(100, Math.round((p.totalBoxes / 36) * 100));
+          const isOver = p.capacityStatus === 'over-capacity';
+          return (
+            <div
+              key={p.id}
+              className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-2xs"
+            >
+              <button
+                type="button"
+                onClick={() => togglePalletExpand(p.id)}
+                className="w-full p-4 flex flex-wrap items-center justify-between gap-3 text-start hover:bg-slate-50/70 dark:hover:bg-neutral-900/40 transition-colors"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center font-mono font-extrabold text-xs shrink-0 border ${
+                      isOver
+                        ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-[#E52225]'
+                        : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900 text-[#B45309] dark:text-amber-400'
+                    }`}
+                  >
+                    {p.palletCode}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-extrabold text-slate-900 dark:text-white">{p.palletCode}</span>
+                      {showContextBadge && (
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 font-mono text-[10px] font-bold">
+                          {p.dossierId}
+                        </span>
+                      )}
+                      {isOver ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/40 text-[#E52225] text-[10px] font-bold">
+                          <AlertTriangle className="w-3 h-3" />
+                          {isAr ? `تجاوز 36 (${p.totalBoxes})` : `Over 36 (${p.totalBoxes})`}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {isAr ? 'سعة طبيعية' : 'Within 36'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-3 tabular-nums">
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-[#D97706]" />
+                        {p.deliveryDate ? formatShortLabelDate(p.deliveryDate) : '—'}
+                      </span>
+                      <span>
+                        {p.jobsCount} {isAr ? 'مشاريع' : 'jobs'}
+                      </span>
+                      <span>
+                        {isAr ? 'سلم الباليت:' : 'Delivered by:'}{' '}
+                        <strong className="text-slate-700 dark:text-neutral-200">{p.deliveredBy}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 shrink-0">
+                  <div className="w-32 hidden sm:block">
+                    <div className="flex items-center justify-between text-[10px] font-bold mb-1 tabular-nums">
+                      <span className="text-slate-500">{isAr ? 'السعة' : 'Capacity'}</span>
+                      <span className={isOver ? 'text-[#E52225]' : 'text-[#D97706]'}>{p.totalBoxes} / 36</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${isOver ? 'bg-[#E52225]' : 'bg-[#D97706]'}`}
+                        style={{ width: `${capacityPct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="text-xs font-extrabold tabular-nums text-slate-800 dark:text-neutral-200 sm:hidden">
+                    {p.totalBoxes}/36
+                  </span>
+                  {isExpanded ? (
+                    <ChevronUp className="w-4 h-4 text-slate-400" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-400" />
+                  )}
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-slate-100 dark:border-neutral-800 overflow-x-auto bg-slate-50/40 dark:bg-neutral-950/30">
+                  <table className="w-full text-xs text-start">
+                    <thead className="bg-slate-50 dark:bg-neutral-900 text-slate-500 text-[11px]">
+                      <tr>
+                        <th className="p-2.5 text-start font-semibold">#</th>
+                        <th className="p-2.5 text-start font-semibold">{isAr ? 'كود المشروع' : 'JOB CODE'}</th>
+                        <th className="p-2.5 text-start font-semibold">{isAr ? 'عدد البوكسات' : 'BOXES'}</th>
+                        <th className="p-2.5 text-start font-semibold">{isAr ? 'تاريخ التسليم' : 'DATE'}</th>
+                        <th className="p-2.5 text-start font-semibold">{isAr ? 'سلم الباليت' : 'DELIVERED BY'}</th>
+                        <th className="p-2.5 text-start font-semibold">{isAr ? 'حالة التسليم' : 'STATUS'}</th>
+                        {isSystemAdmin && <th className="p-2.5 text-center font-semibold">{isAr ? 'حذف' : 'Delete'}</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {p.rows.map((r, rIdx) => (
+                        <tr key={r.id} className="border-t border-slate-100 dark:border-neutral-800">
+                          <td className="p-2.5 tabular-nums text-slate-400">{rIdx + 1}</td>
+                          <td className="p-2.5 font-mono font-bold text-slate-900 dark:text-white">
+                            {r.jobCode || r.linkedBoxes}
+                          </td>
+                          <td className="p-2.5 tabular-nums font-semibold">{r.boxesCount || r.boxCount}</td>
+                          <td className="p-2.5 tabular-nums">{r.deliveryDate || r.inspectionDate}</td>
+                          <td className="p-2.5">{r.deliveredBy || r.custodian || '—'}</td>
+                          <td className="p-2.5">{r.deliveryStatus || '—'}</td>
+                          {isSystemAdmin && (
+                            <td className="p-2.5 text-center">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void handleDeleteRow(r.id)}
+                                title={isAr ? 'حذف السجل' : 'Delete record'}
+                                className="p-1 text-slate-400 hover:text-[#E52225] rounded transition-colors disabled:opacity-40"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderRecordsTable = (rowsToShow: PalletReport[], emptyText: string) => {
+    const startIdx = (safePage - 1) * PAGE_SIZE;
+    const localTotalPages = Math.max(1, Math.ceil(rowsToShow.length / PAGE_SIZE));
+    const localSafePage = Math.min(page, localTotalPages);
+    const localPagedRows = rowsToShow.slice((localSafePage - 1) * PAGE_SIZE, localSafePage * PAGE_SIZE);
+
+    return (
+      <section className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+        <div className="p-4 border-b border-slate-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50 dark:bg-neutral-900/40">
+          <div className="flex items-center gap-2 font-bold text-sm text-slate-900 dark:text-white">
+            <FileText className="w-4 h-4 text-[#D97706]" />
+            <span>
+              {activeDossier
+                ? `${activeDossier.id} · ${safeMonthLabelHelper(activeDossier.monthKey, isAr)}`
+                : activeBox
+                ? `${isAr ? 'بوكس' : 'Box'} ${activeBox.boxCode}`
+                : isAr
+                ? 'جدول سجلات تسليم الباليت'
+                : 'Pallet Delivery Records'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-slate-500 tabular-nums">
+            <span>
+              {rowsToShow.length.toLocaleString()} {isAr ? 'سجل' : 'records'}
+            </span>
+            <span>·</span>
+            <span>
+              {rowsToShow.reduce((s, r) => s + (r.boxesCount || r.boxCount || 0), 0).toLocaleString()}{' '}
+              {isAr ? 'بوكس' : 'boxes'}
+            </span>
+          </div>
+        </div>
+
+        {localPagedRows.length === 0 ? (
+          <div className="py-12 text-center text-xs text-slate-400">{emptyText}</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-slate-50 dark:bg-neutral-900 text-slate-500">
+                <tr>
+                  {[
+                    isAr ? 'البوكس / الدوسيه' : 'BOX / DOSSIER',
+                    isAr ? 'رقم الباليت' : 'PALLET',
+                    isAr ? 'كود المشروع' : 'JOB CODE',
+                    isAr ? 'عدد البوكسات' : 'BOXES',
+                    isAr ? 'تاريخ التسليم' : 'DELIVERY DATE',
+                    isAr ? 'سلم الباليت' : 'DELIVERED BY',
+                    isAr ? 'حالة التسليم' : 'DELIVERY STATUS',
+                    isAr ? 'حالة السعة' : 'CAPACITY',
+                  ].map(h => (
+                    <th key={h} className="p-3 text-start font-semibold">
+                      {h}
+                    </th>
+                  ))}
+                  {isSystemAdmin && <th className="p-3 text-center font-semibold">{isAr ? 'حذف' : 'Delete'}</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {localPagedRows.map(r => {
+                  const dt = r.deliveryDate || r.inspectionDate || '';
+                  const meta = plan.rowMetaById.get(r.id);
+                  return (
+                    <tr
+                      key={r.id}
+                      className="border-t border-slate-100 dark:border-neutral-800 hover:bg-slate-50/50 dark:hover:bg-neutral-900/40"
+                    >
+                      <td className="p-3 font-mono font-bold text-[#B45309] dark:text-amber-400">
+                        {meta?.dossierId || '—'}
+                      </td>
+                      <td className="p-3 font-bold text-slate-900 dark:text-white">{r.palletCode}</td>
+                      <td className="p-3 font-mono">{r.jobCode || r.linkedBoxes}</td>
+                      <td className="p-3 tabular-nums font-semibold">{r.boxesCount || r.boxCount}</td>
+                      <td className="p-3 tabular-nums">{dt}</td>
+                      <td className="p-3">{r.deliveredBy || r.custodian || '—'}</td>
+                      <td className="p-3">{r.deliveryStatus || '—'}</td>
+                      <td className="p-3">
+                        {r.capacityStatus === 'over-capacity' ? (
+                          <span className="inline-flex items-center gap-1 text-[#E52225] font-semibold">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            {isAr ? 'تجاوز 36' : 'Over 36'}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            {isAr ? 'طبيعي' : 'Normal'}
+                          </span>
+                        )}
+                      </td>
+                      {isSystemAdmin && (
+                        <td className="p-3 text-center">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleDeleteRow(r.id)}
+                            title={isAr ? 'حذف السجل' : 'Delete record'}
+                            className="p-1 text-slate-400 hover:text-[#E52225] rounded transition-colors disabled:opacity-40"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {localTotalPages > 1 && (
+          <div className="px-4 py-3 border-t border-slate-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <div className="tabular-nums">
+              {isAr
+                ? `عرض ${startIdx + 1} - ${Math.min(localSafePage * PAGE_SIZE, rowsToShow.length)} من ${rowsToShow.length.toLocaleString()}`
+                : `Showing ${startIdx + 1}-${Math.min(localSafePage * PAGE_SIZE, rowsToShow.length)} of ${rowsToShow.length.toLocaleString()}`}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={localSafePage <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                className="p-1.5 rounded-lg border border-slate-200 dark:border-neutral-800 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-neutral-900"
+              >
+                {isAr ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+              </button>
+              <span className="px-2 font-bold tabular-nums text-slate-800 dark:text-neutral-200">
+                {localSafePage} / {localTotalPages}
+              </span>
+              <button
+                type="button"
+                disabled={localSafePage >= localTotalPages}
+                onClick={() => setPage(p => Math.min(localTotalPages, p + 1))}
+                className="p-1.5 rounded-lg border border-slate-200 dark:border-neutral-800 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-neutral-900"
+              >
+                {isAr ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const pageHeading = activeDossier
+    ? `${activeDossier.id} · ${safeMonthLabelHelper(activeDossier.monthKey, isAr)}`
+    : activeBox
+    ? `${isAr ? 'تفاصيل البوكس' : 'Box Details'} ${activeBox.boxCode}`
+    : effectiveMode === 'dossiers'
+    ? isAr
+      ? 'الدوسيهات الشهرية للباليت'
+      : 'Pallet Monthly Dossiers'
+    : effectiveMode === 'pallets' || effectiveMode === 'records'
+    ? isAr
+      ? 'الباليتات وسجلات التسليم'
+      : 'Pallets & Delivery Records'
+    : isAr
+    ? 'أرشيف تسليم الباليت'
+    : 'Pallet Delivery Archive';
+
+  const pageSubtitle = activeDossier
+    ? isAr
+      ? `بوكس ${activeDossier.boxCode} · الدوسيه ${activeDossier.dossierNumber}/6 · ${formatShortLabelDate(activeDossier.periodStart)} → ${formatShortLabelDate(activeDossier.periodEnd)} · ${activeDossier.palletsCount} باليت`
+      : `Box ${activeDossier.boxCode} · Dossier ${activeDossier.dossierNumber}/6 · ${formatShortLabelDate(activeDossier.periodStart)} → ${formatShortLabelDate(activeDossier.periodEnd)} · ${activeDossier.palletsCount} pallets`
+    : activeBox
+    ? isAr
+      ? `${activeBox.filledDossiers}/${activeBox.totalDossiers} دوسيهات · ${formatShortLabelDate(activeBox.periodStart)} → ${formatShortLabelDate(activeBox.periodEnd)}`
+      : `${activeBox.filledDossiers}/${activeBox.totalDossiers} dossiers · ${formatShortLabelDate(activeBox.periodStart)} → ${formatShortLabelDate(activeBox.periodEnd)}`
+    : '';
+
   return (
     <div className="space-y-5" dir={isAr ? 'rtl' : 'ltr'}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-neutral-800 pb-4">
@@ -1163,47 +1575,56 @@ export const PalletHandoverViews: React.FC<Props> = ({
           <div className="text-[11px] font-bold text-[#D97706] dark:text-amber-400 mb-0.5">
             {isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Reports'}
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
-            {activeDossier
-              ? `${activeDossier.dossierCode} · ${safeMonthLabel(activeDossier.monthKey, isAr)}`
-              : isAr
-              ? 'أرشيف تسليم الباليت (الدوسيهات الشهرية)'
-              : 'Pallet Delivery Archive (Monthly Dossiers)'}
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            {activeDossier
-              ? isAr
-                ? `من ${formatShortLabelDate(activeDossier.minDate)} إلى ${formatShortLabelDate(activeDossier.maxDate)} · ${activeDossier.rows.length.toLocaleString()} سجل`
-                : `From ${formatShortLabelDate(activeDossier.minDate)} to ${formatShortLabelDate(activeDossier.maxDate)} · ${activeDossier.rows.length.toLocaleString()} records`
-              : isAr
-              ? 'كل شهر محفوظ في دوسيه مستقل (P1, P2...) مرتبة من أقدم شهر — اضغط على أي دوسيه لعرض سجلاته.'
-              : 'Each month is stored in a chronological dossier (P1, P2...) — click any dossier to open its records.'}
-          </p>
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{pageHeading}</h1>
+          {pageSubtitle && <p className="text-xs text-slate-500 mt-1">{pageSubtitle}</p>}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {activeBox && (
+            <>
+              <button
+                type="button"
+                onClick={() => onNavigate('boxes')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-[#111111] hover:bg-slate-50 dark:hover:bg-neutral-900 transition-colors"
+              >
+                <BackArrow className="w-3.5 h-3.5" />
+                <span>{isAr ? 'كل البوكسات' : 'All Boxes'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('labels', activeBox.boxCode)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300 hover:bg-amber-100 transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>{isAr ? `طباعة ليبلات ${activeBox.boxCode} (7)` : `Print ${activeBox.boxCode} Labels (7)`}</span>
+              </button>
+            </>
+          )}
+
           {activeDossier && (
             <>
               <button
                 type="button"
-                onClick={() => setSelectedMonthKey(null)}
+                onClick={() => {
+                  onSelectBox?.(activeDossier.boxCode);
+                  onNavigate('box-detail', activeDossier.boxCode);
+                }}
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-[#111111] hover:bg-slate-50 dark:hover:bg-neutral-900 transition-colors"
               >
                 <BackArrow className="w-3.5 h-3.5" />
-                <span>{isAr ? 'كل الدوسيهات' : 'All Dossiers'}</span>
+                <span>{isAr ? `العودة لبوكس ${activeDossier.boxCode}` : `Back to ${activeDossier.boxCode}`}</span>
               </button>
               <button
                 type="button"
-                onClick={() => onNavigate('labels', activeDossier.dossierCode)}
+                onClick={() => onNavigate('labels', `${activeDossier.boxCode}:${activeDossier.dossierNumber}`)}
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300 hover:bg-amber-100 transition-colors"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>
-                  {isAr ? `طباعة ليبل ${activeDossier.dossierCode}` : `Print ${activeDossier.dossierCode} Label`}
-                </span>
+                <span>{isAr ? `طباعة ليبل ${activeDossier.id}` : `Print ${activeDossier.id} Label`}</span>
               </button>
             </>
           )}
+
           {isSystemAdmin && (palletReports.length > 0 || palletArchive.uploadHistory.length > 0) && (
             <button
               type="button"
@@ -1359,34 +1780,87 @@ export const PalletHandoverViews: React.FC<Props> = ({
         </div>
       )}
 
-      {/* KPI Strip */}
+      {/* 4-Level KPI Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: isAr ? 'الدوسيهات الشهرية' : 'Monthly Dossiers', value: dossiers.length },
-          { label: isAr ? 'إجمالي السجلات' : 'Records', value: palletReports.length },
           {
-            label: isAr ? 'إجمالي البوكسات' : 'Total boxes',
-            value: palletReports.reduce((s, r) => s + (r.boxesCount || r.boxCount || 0), 0),
+            label: isAr ? 'البوكسات (P10+)' : 'Boxes (P10+)',
+            value: plan.boxes.length,
+            sub: plan.boxes.length > 0 ? `${plan.boxes[0].boxCode} → ${plan.boxes[plan.boxes.length - 1].boxCode}` : '—',
           },
           {
-            label: isAr ? 'تجاوز السعة' : 'Over capacity',
-            value: new Set(
-              palletReports
-                .filter(r => r.capacityStatus === 'over-capacity')
-                .map(r => `${r.palletCode}|${r.deliveryDate || r.inspectionDate}`)
-            ).size,
+            label: isAr ? 'الدوسيهات الشهرية' : 'Monthly Dossiers',
+            value: plan.filledDossiers.length,
+            sub: isAr ? `من إجمالي ${plan.dossiers.length} خانة (6/بوكس)` : `of ${plan.dossiers.length} slots (6/box)`,
+          },
+          {
+            label: isAr ? 'إجمالي الباليتات' : 'Total Pallets',
+            value: plan.pallets.length,
+            sub: `${palletReports.reduce((s, r) => s + (r.boxesCount || r.boxCount || 0), 0).toLocaleString()} ${isAr ? 'بوكس' : 'boxes'}`,
+          },
+          {
+            label: isAr ? 'إجمالي السجلات' : 'Total Records',
+            value: palletReports.length,
+            sub: `${plan.pallets.filter(p => p.capacityStatus === 'over-capacity').length} ${isAr ? 'تجاوز >36' : 'over 36'}`,
           },
         ].map(k => (
           <div key={k.label} className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4">
             <div className="text-xs text-slate-500">{k.label}</div>
-            <div className="text-2xl font-extrabold mt-2 tabular-nums text-slate-900 dark:text-white">
+            <div className="text-2xl font-extrabold mt-1.5 tabular-nums text-slate-900 dark:text-white">
               {k.value.toLocaleString()}
             </div>
+            <div className="text-[11px] text-slate-400 mt-0.5 tabular-nums">{k.sub}</div>
           </div>
         ))}
       </div>
 
-      {/* Comments-Style Date Range, Status & Search Filter Card */}
+      {/* Sub-Tabs Navigation Switcher (when in top-level Archive or Pallets & Records) */}
+      {activeTab !== 'box-detail' && activeTab !== 'dossier-detail' && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex flex-wrap p-1 rounded-xl bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 gap-1">
+            {(
+              [
+                { id: 'boxes', label: isAr ? 'البوكسات (P10+)' : 'Boxes (P10+)', count: filteredBoxes.length, icon: Archive },
+                { id: 'dossiers', label: isAr ? 'الدوسيهات الشهرية' : 'Monthly Dossiers', count: filteredDossiers.length, icon: FolderArchive },
+                { id: 'pallets', label: isAr ? 'الباليتات' : 'Pallets', count: filteredPallets.length, icon: Layers },
+                { id: 'records', label: isAr ? 'كل السجلات' : 'All Records', count: activeRows.length, icon: FileText },
+              ] as const
+            ).map(tab => {
+              const Icon = tab.icon;
+              const active = effectiveMode === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    setArchiveSubTab(tab.id);
+                    if (tab.id === 'boxes') onNavigate('boxes');
+                    else if (tab.id === 'dossiers') onNavigate('dossiers');
+                    else onNavigate('projects');
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    active
+                      ? 'bg-[#D97706] text-white shadow-xs'
+                      : 'text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{tab.label}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] tabular-nums ${
+                      active ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-neutral-800 text-slate-500'
+                    }`}
+                  >
+                    {tab.count.toLocaleString()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Date Range, Box, Dossier, Capacity & Search Filter Card */}
       <section className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -1397,11 +1871,6 @@ export const PalletHandoverViews: React.FC<Props> = ({
               <h2 className="text-sm font-extrabold text-slate-900 dark:text-white">
                 {isAr ? 'تصفية البيانات' : 'Filter Archive Data'}
               </h2>
-              <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                {isAr
-                  ? 'حدد الفترة الزمنية (من تاريخ / إلى تاريخ) وحالة السعة لعرض النتائج.'
-                  : 'Select a date range (From / To) and capacity status to filter results.'}
-              </p>
             </div>
           </div>
 
@@ -1412,12 +1881,11 @@ export const PalletHandoverViews: React.FC<Props> = ({
               </span>
             )}
             <span className="text-[11px] font-semibold text-slate-500 dark:text-neutral-400 tabular-nums">
-              {isAr ? `${activeRows.length.toLocaleString()} نتيجة` : `${activeRows.length.toLocaleString()} results`}
+              {isAr ? `${activeRows.length.toLocaleString()} سجل` : `${activeRows.length.toLocaleString()} records`}
             </span>
           </div>
         </div>
 
-        {/* Quick Period Presets + Reset */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-semibold text-slate-500 dark:text-neutral-400 me-1">
@@ -1457,7 +1925,6 @@ export const PalletHandoverViews: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Inputs Row: Search + Date From + Date To + Dossier + Capacity Status */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
           <div className="lg:col-span-4 space-y-1">
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400">
@@ -1470,8 +1937,8 @@ export const PalletHandoverViews: React.FC<Props> = ({
                 onChange={e => setSearch(e.target.value)}
                 placeholder={
                   isAr
-                    ? 'رقم الدوسيه (P1) أو الباليت أو المشروع أو سلم الباليت...'
-                    : 'Dossier (P1), pallet, job code or delivered by...'
+                    ? 'بوكس (P10) أو دوسيه (P10-1) أو باليت أو مشروع أو سلم الباليت...'
+                    : 'Box (P10), dossier (P10-1), pallet, job code, delivered by...'
                 }
                 className="w-full ps-9 pe-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl focus:outline-none focus:border-[#D97706]"
               />
@@ -1504,17 +1971,20 @@ export const PalletHandoverViews: React.FC<Props> = ({
 
           <div className="lg:col-span-2 space-y-1">
             <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400">
-              {isAr ? 'الدوسيه الشهري' : 'Monthly Dossier'}
+              {isAr ? 'البوكس' : 'Box'}
             </label>
             <select
-              value={selectedMonthKey ?? 'all'}
-              onChange={e => setSelectedMonthKey(e.target.value === 'all' ? null : e.target.value)}
+              value={boxFilter}
+              onChange={e => {
+                setBoxFilter(e.target.value);
+                setSelectedDossierFilter('all');
+              }}
               className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-xl font-semibold focus:outline-none focus:border-[#D97706]"
             >
-              <option value="all">{isAr ? `كل الدوسيهات (${dossiers.length})` : `All dossiers (${dossiers.length})`}</option>
-              {dossiers.map(d => (
-                <option key={d.monthKey || d.dossierCode} value={d.monthKey}>
-                  {d.dossierCode} · {safeMonthLabel(d.monthKey, isAr)} ({d.rows.length})
+              <option value="all">{isAr ? `كل البوكسات (${plan.boxes.length})` : `All Boxes (${plan.boxes.length})`}</option>
+              {plan.boxes.map(b => (
+                <option key={b.boxCode} value={b.boxCode}>
+                  {b.boxCode} ({b.filledDossiers}/6 · {b.palletsCount}P)
                 </option>
               ))}
             </select>
@@ -1537,7 +2007,7 @@ export const PalletHandoverViews: React.FC<Props> = ({
         </div>
       </section>
 
-      {/* Body: Fast Dossier Cards Grid OR Single-Dossier / Filtered Paginated Table */}
+      {/* Main Content Area: Empty State or 4-Level Hierarchy View */}
       {palletReports.length === 0 ? (
         <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-12 text-center text-sm text-slate-500 space-y-3">
           <FolderArchive className="w-8 h-8 mx-auto opacity-40 text-[#D97706]" />
@@ -1555,223 +2025,347 @@ export const PalletHandoverViews: React.FC<Props> = ({
             </div>
           )}
         </div>
-      ) : !showTableMode ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {dossiers.map(d => (
-            <div
-              key={d.monthKey || d.dossierCode}
-              className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:border-[#D97706]/60 rounded-xl p-4 flex flex-col justify-between gap-4 transition-colors shadow-2xs"
-            >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-900/60 text-[#B45309] dark:text-amber-400 flex items-center justify-center font-mono font-extrabold text-base shrink-0">
-                      {d.dossierCode}
-                    </div>
-                    <div>
-                      <div className="text-sm font-extrabold text-slate-900 dark:text-white">
-                        {safeMonthLabel(d.monthKey, isAr)}
+      ) : effectiveMode === 'box-detail' && activeBox ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {activeBox.dossiers.map(d => {
+              const isEmpty = d.rows.length === 0;
+              return (
+                <div
+                  key={d.id}
+                  className={`bg-white dark:bg-[#111111] border rounded-xl p-4 flex flex-col justify-between gap-4 transition-colors shadow-2xs ${
+                    isEmpty
+                      ? 'border-dashed border-slate-200 dark:border-neutral-800 opacity-80'
+                      : 'border-slate-200 dark:border-neutral-800 hover:border-[#D97706]/60'
+                  }`}
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-900/60 text-[#B45309] dark:text-amber-400 flex flex-col items-center justify-center font-mono font-extrabold shrink-0">
+                          <span className="text-[9px] leading-none opacity-75">D{d.dossierNumber}</span>
+                          <span className="text-xs leading-tight">{d.id}</span>
+                        </div>
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900 dark:text-white">
+                            {safeMonthLabelHelper(d.monthKey, isAr)}
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 tabular-nums">
+                            <Calendar className="w-3 h-3 text-[#D97706]" />
+                            <span>
+                              {formatShortLabelDate(d.periodStart)} → {formatShortLabelDate(d.periodEnd)}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 tabular-nums">
-                        <Calendar className="w-3 h-3 text-[#D97706]" />
-                        <span>
-                          {d.minDate ? formatShortLabelDate(d.minDate) : '—'} →{' '}
-                          {d.maxDate ? formatShortLabelDate(d.maxDate) : '—'}
+                      {isEmpty ? (
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-neutral-900 text-slate-400 text-[10px] font-bold">
+                          {isAr ? 'فارغ' : 'Empty'}
                         </span>
+                      ) : d.overCapacityCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/40 text-[#E52225] text-[10px] font-bold">
+                          <AlertTriangle className="w-3 h-3" />
+                          {d.overCapacityCount}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {isAr ? 'سليم' : 'OK'}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 py-2.5 border-y border-slate-100 dark:border-neutral-800 text-center">
+                      <div>
+                        <div className="text-[10px] text-slate-400">{isAr ? 'الباليتات' : 'Pallets'}</div>
+                        <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                          {d.palletsCount.toLocaleString()}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-slate-400">{isAr ? 'البوكسات' : 'Boxes'}</div>
+                        <div className="text-sm font-extrabold tabular-nums text-[#D97706] dark:text-amber-400">
+                          {d.totalBoxes.toLocaleString()}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-slate-400">{isAr ? 'السجلات' : 'Records'}</div>
+                        <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                          {d.rows.length.toLocaleString()}
+                        </div>
                       </div>
                     </div>
                   </div>
-                  {d.overCapacityCount > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/40 text-[#E52225] text-[10px] font-bold">
-                      <AlertTriangle className="w-3 h-3" />
-                      {d.overCapacityCount}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold">
-                      <CheckCircle2 className="w-3 h-3" />
-                      {isAr ? 'سليم' : 'OK'}
-                    </span>
-                  )}
-                </div>
 
-                <div className="grid grid-cols-3 gap-2 py-2.5 border-y border-slate-100 dark:border-neutral-800 text-center">
-                  <div>
-                    <div className="text-[10px] text-slate-400">{isAr ? 'السجلات' : 'Records'}</div>
-                    <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
-                      {d.rows.length.toLocaleString()}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-slate-400">{isAr ? 'الباليتات' : 'Pallets'}</div>
-                    <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
-                      {d.palletsCount.toLocaleString()}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-slate-400">{isAr ? 'البوكسات' : 'Boxes'}</div>
-                    <div className="text-sm font-extrabold tabular-nums text-[#D97706] dark:text-amber-400">
-                      {d.totalBoxes.toLocaleString()}
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openDossier(d)}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-colors ${
+                        isEmpty
+                          ? 'bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 hover:bg-slate-200 dark:hover:bg-neutral-800'
+                          : 'bg-[#D97706] hover:bg-[#B45309] text-white'
+                      }`}
+                    >
+                      {isAr ? `فتح الدوسيه (${d.dossierNumber}/6)` : `Open Dossier (${d.dossierNumber}/6)`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('labels', `${activeBox.boxCode}:${d.dossierNumber}`)}
+                      title={isAr ? `طباعة ليبل ${d.id}` : `Print ${d.id} label`}
+                      className="p-2 rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:border-[#D97706] hover:text-[#D97706] transition-colors"
+                    >
+                      <Printer className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedMonthKey(d.monthKey)}
-                  className="flex-1 py-2 px-3 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-colors"
-                >
-                  {isAr ? `فتح الدوسيه ${d.dossierCode}` : `Open ${d.dossierCode}`}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('labels', d.dossierCode)}
-                  title={isAr ? `طباعة ليبل ${d.dossierCode}` : `Print ${d.dossierCode} label`}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:border-[#D97706] hover:text-[#D97706] transition-colors"
-                >
-                  <Printer className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </div>
-      ) : (
-        <section className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl overflow-hidden">
-          <div className="p-4 border-b border-slate-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50 dark:bg-neutral-900/40">
-            <div className="flex items-center gap-2 font-bold text-sm text-slate-900 dark:text-white">
-              <FolderArchive className="w-4 h-4 text-[#D97706]" />
-              <span>
-                {activeDossier
-                  ? `${activeDossier.dossierCode} · ${safeMonthLabel(activeDossier.monthKey, isAr)}`
-                  : isAr
-                  ? 'نتائج البحث والتصفية'
-                  : 'Filtered Results'}
-              </span>
+      ) : effectiveMode === 'dossier-detail' && activeDossier ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-3">
+            <div className="inline-flex p-1 rounded-lg bg-slate-100 dark:bg-neutral-900 gap-1">
+              <button
+                type="button"
+                onClick={() => setDossierDetailView('pallets')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                  dossierDetailView === 'pallets'
+                    ? 'bg-[#D97706] text-white'
+                    : 'text-slate-600 dark:text-neutral-300'
+                }`}
+              >
+                {isAr
+                  ? `الباليتات داخل الدوسيه (${filteredPallets.length})`
+                  : `Pallets in Dossier (${filteredPallets.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDossierDetailView('records')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                  dossierDetailView === 'records'
+                    ? 'bg-[#D97706] text-white'
+                    : 'text-slate-600 dark:text-neutral-300'
+                }`}
+              >
+                {isAr
+                  ? `كل السجلات (${activeRows.length})`
+                  : `All Records (${activeRows.length})`}
+              </button>
             </div>
-            <div className="flex items-center gap-3 text-xs text-slate-500 tabular-nums">
-              <span>
-                {activeRows.length.toLocaleString()} {isAr ? 'سجل' : 'records'}
-              </span>
-              <span>·</span>
-              <span>
-                {activeRows.reduce((s, r) => s + (r.boxesCount || r.boxCount || 0), 0).toLocaleString()}{' '}
-                {isAr ? 'بوكس' : 'boxes'}
-              </span>
+
+            <div className="text-xs text-slate-500 tabular-nums">
+              {isAr ? 'الشهر:' : 'Month:'} <strong className="text-slate-900 dark:text-white">{safeMonthLabelHelper(activeDossier.monthKey, isAr)}</strong>
             </div>
           </div>
 
-          {pagedRows.length === 0 ? (
-            <div className="py-12 text-center text-xs text-slate-400">
-              {isAr ? 'لا توجد سجلات مطابقة للبحث' : 'No matching records'}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-start">
-                <thead className="bg-slate-50 dark:bg-neutral-900 text-slate-500">
-                  <tr>
-                    {!activeDossier && <th className="p-3 text-start font-semibold">{isAr ? 'الدوسيه' : 'DOSSIER'}</th>}
-                    {[
-                      isAr ? 'رقم الباليت' : 'PALLET',
-                      isAr ? 'كود المشروع' : 'JOB CODE',
-                      isAr ? 'عدد البوكسات' : 'BOXES',
-                      isAr ? 'تاريخ التسليم' : 'DELIVERY DATE',
-                      isAr ? 'سلم الباليت' : 'DELIVERED BY',
-                      isAr ? 'حالة التسليم' : 'DELIVERY STATUS',
-                      isAr ? 'حالة السعة' : 'CAPACITY',
-                    ].map(h => (
-                      <th key={h} className="p-3 text-start font-semibold">
-                        {h}
-                      </th>
-                    ))}
-                    {isSystemAdmin && <th className="p-3 text-center font-semibold">{isAr ? 'حذف' : 'Delete'}</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedRows.map(r => {
-                    const dt = r.deliveryDate || r.inspectionDate || '';
-                    const mKey = r.archiveMonth || (dt.length >= 7 ? dt.slice(0, 7) : '');
-                    const dCode = dossierByMonth.get(mKey)?.dossierCode || '—';
-                    return (
-                      <tr
-                        key={r.id}
-                        className="border-t border-slate-100 dark:border-neutral-800 hover:bg-slate-50/50 dark:hover:bg-neutral-900/40"
-                      >
-                        {!activeDossier && (
-                          <td className="p-3 font-mono font-bold text-[#B45309] dark:text-amber-400">{dCode}</td>
-                        )}
-                        <td className="p-3 font-bold text-slate-900 dark:text-white">{r.palletCode}</td>
-                        <td className="p-3 font-mono">{r.jobCode || r.linkedBoxes}</td>
-                        <td className="p-3 tabular-nums font-semibold">{r.boxesCount || r.boxCount}</td>
-                        <td className="p-3 tabular-nums">{dt}</td>
-                        <td className="p-3">{r.deliveredBy || r.custodian || '—'}</td>
-                        <td className="p-3">{r.deliveryStatus || '—'}</td>
-                        <td className="p-3">
-                          {r.capacityStatus === 'over-capacity' ? (
-                            <span className="inline-flex items-center gap-1 text-[#E52225] font-semibold">
-                              <AlertTriangle className="w-3.5 h-3.5" />
-                              {isAr ? 'تجاوز 36' : 'Over 36'}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              {isAr ? 'طبيعي' : 'Normal'}
-                            </span>
-                          )}
-                        </td>
-                        {isSystemAdmin && (
-                          <td className="p-3 text-center">
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void handleDeleteRow(r.id)}
-                              title={isAr ? 'حذف السجل' : 'Delete record'}
-                              className="p-1 text-slate-400 hover:text-[#E52225] rounded transition-colors disabled:opacity-40"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {dossierDetailView === 'pallets'
+            ? renderPalletsList(filteredPallets, false)
+            : renderRecordsTable(
+                activeRows,
+                isAr ? 'لا توجد سجلات داخل هذا الدوسيه' : 'No records in this dossier'
+              )}
+        </div>
+      ) : effectiveMode === 'boxes' ? (
+        filteredBoxes.length === 0 ? (
+          <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl py-12 text-center text-xs text-slate-400">
+            {isAr ? 'لا توجد بوكسات مطابقة للتصفية الحالية' : 'No matching boxes'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredBoxes.map(b => (
+              <div
+                key={b.boxCode}
+                className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:border-[#D97706]/60 rounded-xl p-4 flex flex-col justify-between gap-4 transition-colors shadow-2xs"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-12 h-12 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-900/60 text-[#B45309] dark:text-amber-400 flex items-center justify-center font-mono font-extrabold text-base shrink-0">
+                        {b.boxCode}
+                      </div>
+                      <div>
+                        <div className="text-sm font-extrabold text-slate-900 dark:text-white">
+                          {isAr ? `بوكس ${b.boxCode}` : `Box ${b.boxCode}`}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 tabular-nums">
+                          <Calendar className="w-3 h-3 text-[#D97706]" />
+                          <span>
+                            {formatShortLabelDate(b.periodStart)} → {formatShortLabelDate(b.periodEnd)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                        b.status === 'Archived'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                          : 'bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300'
+                      }`}
+                    >
+                      {b.filledDossiers}/6 {isAr ? 'دوسيهات' : 'Dossiers'}
+                    </span>
+                  </div>
 
-          {/* Pagination Footer */}
-          {totalPages > 1 && (
-            <div className="px-4 py-3 border-t border-slate-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-              <div className="tabular-nums">
-                {isAr
-                  ? `عرض ${(safePage - 1) * PAGE_SIZE + 1} - ${Math.min(safePage * PAGE_SIZE, activeRows.length)} من ${activeRows.length.toLocaleString()}`
-                  : `Showing ${(safePage - 1) * PAGE_SIZE + 1}-${Math.min(safePage * PAGE_SIZE, activeRows.length)} of ${activeRows.length.toLocaleString()}`}
+                  {/* 6 Monthly Dossier Mini-Pills */}
+                  <div className="grid grid-cols-6 gap-1">
+                    {b.dossiers.map(d => {
+                      const hasRows = d.rows.length > 0;
+                      const hasOver = d.overCapacityCount > 0;
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => openDossier(d)}
+                          title={`${d.id} · ${safeMonthLabelHelper(d.monthKey, isAr)} (${d.palletsCount}P)`}
+                          className={`py-1.5 px-1 rounded-md border text-center transition-colors ${
+                            hasOver
+                              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-[#E52225]'
+                              : hasRows
+                              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900 text-[#B45309] dark:text-amber-300 hover:bg-amber-100'
+                              : 'bg-slate-50 dark:bg-neutral-900 border-slate-200 dark:border-neutral-800 text-slate-400'
+                          }`}
+                        >
+                          <div className="text-[10px] font-extrabold leading-none">D{d.dossierNumber}</div>
+                          <div className="text-[9px] tabular-nums mt-0.5 leading-none opacity-80">
+                            {hasRows ? `${d.palletsCount}P` : '—'}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 py-2.5 border-y border-slate-100 dark:border-neutral-800 text-center">
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'الباليتات' : 'Pallets'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                        {b.palletsCount.toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'البوكسات' : 'Boxes'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-[#D97706] dark:text-amber-400">
+                        {b.totalBoxes.toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'السجلات' : 'Records'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                        {b.recordsCount.toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openBox(b.boxCode)}
+                    className="flex-1 py-2 px-3 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-colors inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span>{isAr ? `فتح البوكس ${b.boxCode}` : `Open Box ${b.boxCode}`}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('labels', b.boxCode)}
+                    title={isAr ? `طباعة ليبلات ${b.boxCode} (7 صفحات)` : `Print ${b.boxCode} package (7 labels)`}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:border-[#D97706] hover:text-[#D97706] transition-colors"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={safePage <= 1}
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-neutral-800 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-neutral-900"
-                >
-                  {isAr ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-                </button>
-                <span className="px-2 font-bold tabular-nums text-slate-800 dark:text-neutral-200">
-                  {safePage} / {totalPages}
-                </span>
-                <button
-                  type="button"
-                  disabled={safePage >= totalPages}
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-neutral-800 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-neutral-900"
-                >
-                  {isAr ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                </button>
+            ))}
+          </div>
+        )
+      ) : effectiveMode === 'dossiers' ? (
+        filteredDossiers.length === 0 ? (
+          <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl py-12 text-center text-xs text-slate-400">
+            {isAr ? 'لا توجد دوسيهات مطابقة للتصفية الحالية' : 'No matching dossiers'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredDossiers.map(d => (
+              <div
+                key={d.id}
+                className={`bg-white dark:bg-[#111111] border rounded-xl p-4 flex flex-col justify-between gap-4 transition-colors shadow-2xs ${
+                  d.rows.length === 0
+                    ? 'border-dashed border-slate-200 dark:border-neutral-800 opacity-75'
+                    : 'border-slate-200 dark:border-neutral-800 hover:border-[#D97706]/60'
+                }`}
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-900/60 text-[#B45309] dark:text-amber-400 flex items-center justify-center font-mono font-extrabold text-xs shrink-0">
+                        {d.id}
+                      </div>
+                      <div>
+                        <div className="text-sm font-extrabold text-slate-900 dark:text-white">
+                          {safeMonthLabelHelper(d.monthKey, isAr)}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5 tabular-nums">
+                          <Calendar className="w-3 h-3 text-[#D97706]" />
+                          <span>
+                            {formatShortLabelDate(d.periodStart)} → {formatShortLabelDate(d.periodEnd)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-neutral-300 text-[10px] font-bold">
+                      {d.boxCode} · D{d.dossierNumber}/6
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 py-2.5 border-y border-slate-100 dark:border-neutral-800 text-center">
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'الباليتات' : 'Pallets'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                        {d.palletsCount.toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'البوكسات' : 'Boxes'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-[#D97706] dark:text-amber-400">
+                        {d.totalBoxes.toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">{isAr ? 'السجلات' : 'Records'}</div>
+                      <div className="text-sm font-extrabold tabular-nums text-slate-900 dark:text-white">
+                        {d.rows.length.toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openDossier(d)}
+                    className="flex-1 py-2 px-3 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold transition-colors"
+                  >
+                    {isAr ? `فتح الدوسيه ${d.id}` : `Open ${d.id}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('labels', `${d.boxCode}:${d.dossierNumber}`)}
+                    title={isAr ? `طباعة ليبل ${d.id}` : `Print ${d.id} label`}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-neutral-300 hover:border-[#D97706] hover:text-[#D97706] transition-colors"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </section>
+            ))}
+          </div>
+        )
+      ) : effectiveMode === 'pallets' ? (
+        renderPalletsList(filteredPallets, true)
+      ) : (
+        renderRecordsTable(activeRows, isAr ? 'لا توجد سجلات مطابقة للبحث' : 'No matching records')
       )}
     </div>
   );

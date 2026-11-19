@@ -23,11 +23,13 @@ import { IntercomLogo } from './components/common/IntercomLogo';
 import { WorkspacePortalView } from './components/portal/WorkspacePortalView';
 import { AdminWorkspaceView } from './components/portal/AdminWorkspaceView';
 import { SectionPagesView } from './components/workspace/SectionPagesView';
+import { buildPalletBoxPlan } from './utils/palletArchivePlan';
 
 function MainApp() {
   const {
     language,
     dossiers,
+    palletReports,
     authenticated,
     authLoading,
     archiveLoading,
@@ -190,6 +192,23 @@ function MainApp() {
       case 'dossiers':
         return [homeCrumb, { label: isAr ? 'الدوسيهات' : 'Dossiers' }];
       case 'dossier-detail': {
+        if (activeWorkspace === 'pallet-archive') {
+          const pd = buildPalletBoxPlan(palletReports).dossiers.find(x => x.id === selectedDossierId);
+          const fallbackBox = selectedDossierId.includes('-') ? selectedDossierId.split('-')[0] : selectedBoxId;
+          const fallbackDossierNum = selectedDossierId.includes('-')
+            ? Number(selectedDossierId.split('-')[1]) || 1
+            : 1;
+          return [
+            homeCrumb,
+            { label: isAr ? 'البوكسات' : 'Boxes', tab: 'boxes' as ActiveTab },
+            {
+              label: `${isAr ? 'بوكس' : 'Box'} ${pd?.boxCode || fallbackBox}`,
+              tab: 'box-detail' as ActiveTab,
+              param: pd?.boxCode || fallbackBox,
+            },
+            { label: isAr ? `دوسيه ${pd?.dossierNumber || fallbackDossierNum}` : `Dossier ${pd?.dossierNumber || fallbackDossierNum}` },
+          ];
+        }
         const d = dossiers.find(x => x.id === selectedDossierId);
         return [
           homeCrumb,
@@ -211,6 +230,10 @@ function MainApp() {
                 ? isAr
                   ? 'الفروع'
                   : 'Branches'
+                : activeWorkspace === 'pallet-archive'
+                ? isAr
+                  ? 'الباليتات والسجلات'
+                  : 'Pallets & Records'
                 : isAr
                 ? 'المشاريع'
                 : 'Projects',

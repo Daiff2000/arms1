@@ -483,3 +483,58 @@ export function buildWeeklyBoxLabelPackage(
 
   return [boxLabel, ...dossierLabels];
 }
+
+/**
+ * Helper to build a 7-label package for a Pallet Archive box (P10+):
+ * 1 Box label (spanning the 6 months) + 6 Monthly Dossier labels (DD/MM/YY).
+ */
+export function buildPalletBoxLabelPackage(
+  boxCode: string,
+  boxDossiers: Array<{ dossierNumber: number; periodStart: string; periodEnd: string }>
+): LabelData[] {
+  const sorted = [...boxDossiers].sort((a, b) => a.dossierNumber - b.dossierNumber);
+  const firstStart = sorted[0]?.periodStart || '';
+  const lastEnd = sorted[sorted.length - 1]?.periodEnd || '';
+
+  const boxLabel: LabelData = {
+    type: 'box',
+    boxCode,
+    fromJobId: 1,
+    toJobId: 6,
+    fromLabel: formatShortLabelDate(firstStart),
+    toLabel: formatShortLabelDate(lastEnd),
+  };
+
+  const dossierLabels: LabelData[] = sorted.slice(0, 6).map(d => ({
+    type: 'dossier',
+    boxCode,
+    dossierNumber: d.dossierNumber,
+    totalDossiers: 6,
+    fromJobId: d.dossierNumber,
+    toJobId: d.dossierNumber,
+    fromLabel: formatShortLabelDate(d.periodStart),
+    toLabel: formatShortLabelDate(d.periodEnd),
+  }));
+
+  return [boxLabel, ...dossierLabels];
+}
+
+/**
+ * Builds a manual 7-label Pallet Box package starting from a given year & month (defaults to Month 8 = August).
+ */
+export function buildPalletManualBoxPackage(
+  boxCode: string,
+  startYear: number,
+  startMonth: number = 8
+): LabelData[] {
+  const dossiers = Array.from({ length: 6 }, (_, idx) => {
+    const b = monthBoundsIso(startYear, startMonth + idx);
+    return {
+      dossierNumber: idx + 1,
+      periodStart: b.start,
+      periodEnd: b.end,
+    };
+  });
+  return buildPalletBoxLabelPackage(boxCode, dossiers);
+}
+

@@ -1125,3 +1125,320 @@ export async function exportCommentsReportToPDF(opts: CommentsReportExportOption
   pdf.save(fileName);
   return fileName;
 }
+
+/* ============================================================================
+ * UNIFIED BOXES & DOSSIERS DISTRIBUTION REPORT (ALL 3 SECTIONS)
+ * ============================================================================ */
+
+export interface UnifiedDistributionDossier {
+  id: string;
+  dossierNumber: number;
+  spanLabel: string;
+  subtitleTag?: string;
+  metricsLabel: string;
+  status: string;
+}
+
+export interface UnifiedDistributionBox {
+  boxCode: string;
+  spanLabel: string;
+  tagLabel?: string;
+  metricsLabel: string;
+  status: string;
+  totalSlots: number;
+  dossiers: UnifiedDistributionDossier[];
+}
+
+export interface UnifiedDistributionExportOptions {
+  reportTitle?: string;
+  sectionSubtitle?: string;
+  scopeLabel: string;
+  totalSummary: string;
+  items: UnifiedDistributionBox[];
+  preparedBy: string;
+  printDate: string;
+  filePrefix: string;
+}
+
+export function paginateUnifiedDistributionBoxes(
+  items: UnifiedDistributionBox[]
+): UnifiedDistributionBox[][] {
+  if (items.length === 0) return [[]];
+
+  const START_Y = 250;
+  const MAX_Y = 1702;
+  const CARD_GAP = 22;
+  const HEADER_H = 52;
+  const DOSSIER_ROW_H = 72;
+
+  const pages: UnifiedDistributionBox[][] = [];
+  let current: UnifiedDistributionBox[] = [];
+  let cursorY = START_Y;
+
+  for (const box of items) {
+    const slots = Math.max(box.totalSlots || 6, box.dossiers.length);
+    const rows = Math.max(1, Math.ceil(slots / 2));
+    const cardH = HEADER_H + rows * DOSSIER_ROW_H;
+    if (current.length > 0 && (cursorY + cardH > MAX_Y || current.length >= REPORT_BOXES_PER_PAGE)) {
+      pages.push(current);
+      current = [box];
+      cursorY = START_Y + cardH + CARD_GAP;
+    } else {
+      current.push(box);
+      cursorY += cardH + CARD_GAP;
+    }
+  }
+  if (current.length > 0) pages.push(current);
+  return pages;
+}
+
+export function exportUnifiedDistributionExcel(opts: UnifiedDistributionExportOptions): string {
+  const title = opts.reportTitle || 'Boxes & Dossiers Distribution';
+  const columns = [
+    'Box Code',
+    'Box Range / Period',
+    'Box Summary',
+    'Box Status',
+    'Dossier #',
+    'Dossier ID',
+    'Dossier Range / Period',
+    'Dossier Summary',
+    'Dossier Status',
+  ];
+
+  const rows: Record<string, string | number>[] = [];
+  for (const box of opts.items) {
+    const slotCount = Math.max(box.totalSlots || 6, box.dossiers.length);
+    for (let idx = 0; idx < slotCount; idx++) {
+      const slotNum = idx + 1;
+      const d = box.dossiers.find(item => item.dossierNumber === slotNum) || box.dossiers[idx];
+      rows.push({
+        'Box Code': box.boxCode,
+        'Box Range / Period': box.spanLabel,
+        'Box Summary': box.metricsLabel,
+        'Box Status': box.status,
+        'Dossier #': `${slotNum} / ${slotCount}`,
+        'Dossier ID': d ? d.id : `${box.boxCode}-${slotNum}`,
+        'Dossier Range / Period': d ? d.spanLabel : '—',
+        'Dossier Summary': d ? d.metricsLabel : 'Empty',
+        'Dossier Status': d ? d.status : 'Empty',
+      });
+    }
+  }
+
+  const colCount = Math.max(columns.length + 1, 5);
+  const metaRows: (string | number)[][] = [
+    ['Intercom ARMS', '', title, ...Array(Math.max(0, colCount - 3)).fill('')],
+    [],
+    ['Scope :', opts.scopeLabel, '', 'Print Date :', opts.printDate],
+    ['Total :', opts.totalSummary, '', 'Prepared By :', opts.preparedBy || 'System Admin'],
+    [],
+  ];
+
+  const tableRows: (string | number)[][] = [
+    ['#', ...columns],
+    ...rows.map((row, idx) => [
+      idx + 1,
+      ...columns.map(col => {
+        const val = row[col];
+        return typeof val === 'number' ? val : String(val ?? '—');
+      }),
+    ]),
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet([...metaRows, ...tableRows]);
+  ws['!merges'] = [{ s: { r: 0, c: 2 }, e: { r: 0, c: Math.max(2, colCount - 1) } }];
+  ws['!cols'] = Array.from({ length: columns.length + 1 }, (_, colIdx) => {
+    let maxLen = colIdx === 0 ? 6 : 14;
+    for (const r of tableRows) {
+      const len = String(r[colIdx] ?? '').length;
+      if (len > maxLen) maxLen = len;
+    }
+    return { wch: Math.min(maxLen + 4, 42) };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Distribution');
+  const fileName = `${opts.filePrefix}_Distribution_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+  return fileName;
+}
+
+export async function exportUnifiedDistributionPDF(opts: UnifiedDistributionExportOptions): Promise<string> {
+  if (document.fonts?.ready) {
+    await document.fonts.ready;
+  }
+
+  let logoImg: HTMLImageElement | null = null;
+  let armsLogoImg: HTMLImageElement | null = null;
+  try {
+    [logoImg, armsLogoImg] = await Promise.all([loadImage(logoColor), loadImage(armsLogoLight)]);
+  } catch {
+    logoImg = await loadImage(logoColor).catch(() => null);
+    armsLogoImg = await loadImage(armsLogoLight).catch(() => null);
+  }
+
+  const W = 1260;
+  const H = 1782;
+  const M = 60;
+  const CONTENT_W = W - M * 2;
+  const HALF_W = CONTENT_W / 2;
+
+  const pdf = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const title = opts.reportTitle || 'Boxes & Dossiers Distribution';
+  const pages = paginateUnifiedDistributionBoxes(opts.items);
+
+  for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+    const pageBoxes = pages[pageIdx];
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+    ctx.direction = 'ltr';
+
+    drawPageChrome(
+      ctx,
+      logoImg,
+      armsLogoImg,
+      title,
+      opts.scopeLabel,
+      opts.totalSummary,
+      opts.printDate,
+      opts.preparedBy,
+      pageIdx,
+      pages.length
+    );
+
+    const START_Y = 250;
+    const CARD_GAP = 22;
+    const HEADER_H = 52;
+    const DOSSIER_ROW_H = 72;
+
+    if (pageBoxes.length === 0) {
+      ctx.strokeStyle = '#CBD5E1';
+      ctx.strokeRect(M, START_Y, CONTENT_W, 74);
+      ctx.fillStyle = '#64748B';
+      ctx.font = '500 16.5px "Inter", Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No matching boxes', W / 2, START_Y + 44);
+    } else {
+      let cardY = START_Y;
+      for (const box of pageBoxes) {
+        const slotCount = Math.max(box.totalSlots || 6, box.dossiers.length);
+        const rows = Math.max(1, Math.ceil(slotCount / 2));
+        const cardH = HEADER_H + rows * DOSSIER_ROW_H;
+
+        // Box header band
+        ctx.fillStyle = '#D9D9D9';
+        ctx.fillRect(M, cardY, CONTENT_W, HEADER_H);
+        ctx.strokeStyle = '#64748B';
+        ctx.lineWidth = 1.3;
+        ctx.strokeRect(M, cardY, CONTENT_W, cardH);
+
+        ctx.beginPath();
+        ctx.moveTo(M, cardY + HEADER_H);
+        ctx.lineTo(M + CONTENT_W, cardY + HEADER_H);
+        ctx.stroke();
+
+        // Left banner: Box Code + Span (+ tag if present)
+        const leftBanner = box.tagLabel
+          ? `Box ${box.boxCode}  ·  ${box.spanLabel}  ·  ${box.tagLabel}`
+          : `Box ${box.boxCode}  ·  ${box.spanLabel}`;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#0F172A';
+        ctx.font = 'bold 17px "Inter", Arial, sans-serif';
+        ctx.fillText(truncateText(ctx, leftBanner, CONTENT_W * 0.52), M + 18, cardY + 32);
+
+        // Right banner: Summary metrics + Status
+        const rightBanner = `${box.metricsLabel} · ${box.status}`;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#1E293B';
+        ctx.font = '600 15px "Inter", Arial, sans-serif';
+        ctx.fillText(truncateText(ctx, rightBanner, CONTENT_W * 0.45), M + CONTENT_W - 18, cardY + 32);
+
+        // 2-column Dossiers Grid
+        for (let r = 0; r < rows; r++) {
+          const rowY = cardY + HEADER_H + r * DOSSIER_ROW_H;
+          if (r > 0) {
+            ctx.strokeStyle = '#CBD5E1';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(M, rowY);
+            ctx.lineTo(M + CONTENT_W, rowY);
+            ctx.stroke();
+          }
+
+          for (let c = 0; c < 2; c++) {
+            const dIdx = r * 2 + c;
+            const slotNum = dIdx + 1;
+            const cellX = M + c * HALF_W;
+
+            if (c === 1) {
+              ctx.strokeStyle = '#CBD5E1';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(cellX, rowY);
+              ctx.lineTo(cellX, rowY + DOSSIER_ROW_H);
+              ctx.stroke();
+            }
+
+            if (slotNum > slotCount) continue;
+
+            const dossier =
+              box.dossiers.find(item => item.dossierNumber === slotNum) || box.dossiers[dIdx];
+            if (!dossier) {
+              ctx.fillStyle = '#94A3B8';
+              ctx.font = '500 14.5px "Inter", Arial, sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText(`Dossier ${slotNum} (${box.boxCode}-${slotNum}) · Empty`, cellX + HALF_W / 2, rowY + 42);
+              continue;
+            }
+
+            const topLeft = `Dossier ${dossier.dossierNumber} (${dossier.id})`;
+            const topRight = dossier.subtitleTag
+              ? `${dossier.subtitleTag} · ${dossier.spanLabel}`
+              : dossier.spanLabel;
+
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#0F172A';
+            ctx.font = 'bold 16px "Inter", Arial, sans-serif';
+            ctx.fillText(truncateText(ctx, topLeft, HALF_W * 0.48), cellX + 18, rowY + 28);
+
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#0F172A';
+            ctx.font = 'bold 15px "Inter", Arial, sans-serif';
+            ctx.fillText(truncateText(ctx, topRight, HALF_W * 0.46), cellX + HALF_W - 18, rowY + 28);
+
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#475569';
+            ctx.font = '500 14px "Inter", Arial, sans-serif';
+            ctx.fillText(truncateText(ctx, dossier.metricsLabel, HALF_W - 135), cellX + 18, rowY + 55);
+
+            ctx.textAlign = 'right';
+            ctx.fillStyle = dossier.status === 'Over Capacity' ? '#B91C1C' : '#0F172A';
+            ctx.font = 'bold 14px "Inter", Arial, sans-serif';
+            ctx.fillText(dossier.status, cellX + HALF_W - 18, rowY + 55);
+          }
+        }
+
+        cardY += cardH + CARD_GAP;
+      }
+    }
+
+    if (pageIdx > 0) {
+      pdf.addPage('a4', 'portrait');
+    }
+    const imgData = canvas.toDataURL('image/png', 1.0);
+    pdf.addImage(imgData, 'PNG', 0, 0, 210, 297);
+  }
+
+  const fileName = `${opts.filePrefix}_Distribution_A4_${new Date().toISOString().slice(0, 10)}.pdf`;
+  pdf.save(fileName);
+  return fileName;
+}
+

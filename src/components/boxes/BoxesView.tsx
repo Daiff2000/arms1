@@ -405,11 +405,6 @@ export const BoxesView: React.FC<BoxesViewProps> = ({
             <h2 className="text-base font-bold text-slate-900 dark:text-white">
               {language === 'ar' ? 'إنشاء بوكس أرشفة جديد' : 'Create New Archive Box'}
             </h2>
-            <p className="text-xs text-slate-500">
-              {language === 'ar'
-                ? 'ينشئ النظام تلقائياً 6 دوسيهات و 300 خانة مشروع ابتداءً من الرقم المحدد.'
-                : 'Generates 6 dossiers and 300 slots starting at specified Job ID.'}
-            </p>
 
             <form onSubmit={handleCreateBox} className="space-y-3">
               <div>

@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
@@ -17,25 +18,43 @@ import {
   Printer,
   RotateCcw,
   Search,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
 import { useArchive } from '../../context/ArchiveContext';
 import { LabelData } from '../../types';
 import { ActiveTab } from '../navigation/TopNav';
 import { MinutesArchiveViews } from './MinutesArchiveViews';
-import { PalletHandoverViews, buildPalletMonthlyDossiers, safeMonthLabel } from './PalletHandoverViews';
+import { PalletHandoverViews } from './PalletHandoverViews';
 import { LabelCanvasPreview, LabelVectorSvg } from '../labels/LabelCanvasPreview';
+import { UnifiedDistributionSheet } from '../reports/UnifiedDistributionSheet';
 import {
+  buildPalletBoxLabelPackage,
+  buildPalletManualBoxPackage,
   formatShortLabelDate,
   generateLabelsPDF,
   generateQRDataURL,
   getMonochromeLabelLogos,
   getQRCodeText,
 } from '../../utils/labelGenerator';
-import { exportCommentsReportToPDF } from '../../utils/reportExporter';
+import {
+  exportCommentsReportToPDF,
+  exportUnifiedDistributionExcel,
+  exportUnifiedDistributionPDF,
+  UnifiedDistributionBox,
+} from '../../utils/reportExporter';
+import { buildPalletBoxPlan, monthBoundsIso, safeMonthLabel } from '../../utils/palletArchivePlan';
 import { weekEndOf, weekStartOf } from '../../utils/minutesPlan';
 import logoColor from '../../assets/logo.png';
 import armsLogoLight from '../../assets/arms-logo.png';
+
+interface PrintableLabelItem {
+  label: LabelData;
+  qrSrc: string;
+  intercomLogoSrc?: string;
+  armsLogoSrc?: string;
+}
 
 interface SectionPagesViewProps {
   workspace: 'pallet-archive' | 'minutes-archive';
@@ -74,91 +93,177 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   const [palletStatusFilter, setPalletStatusFilter] = useState<'all' | 'normal' | 'over-capacity'>('all');
 
   // Reports state
-  const [selectedReportTab, setSelectedReportTab] = useState<'summary' | 'records' | 'audit'>('summary');
+  const [selectedReportTab, setSelectedReportTab] = useState<'distribution' | 'summary' | 'records' | 'audit'>(
+    'distribution'
+  );
+  const [reportBoxFilter, setReportBoxFilter] = useState<string>('all');
   const [reportMonthFilter, setReportMonthFilter] = useState<string>('all');
   const [reportDateFrom, setReportDateFrom] = useState<string>('');
   const [reportDateTo, setReportDateTo] = useState<string>('');
   const [reportSearch, setReportSearch] = useState('');
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [printingDistribution, setPrintingDistribution] = useState(false);
 
-  // Labels state
-  const [labelMode, setLabelMode] = useState<'dossier' | 'manual'>('dossier');
-  const [selectedDossierCode, setSelectedDossierCode] = useState<string>('');
-  const [manualLabelCode, setManualLabelCode] = useState<string>('P1');
-  const [manualFromLabel, setManualFromLabel] = useState<string>('01/01/26');
-  const [manualToLabel, setManualToLabel] = useState<string>('31/01/26');
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [logos, setLogos] = useState<{ intercomSrc: string; armsSrc: string }>({ intercomSrc: '', armsSrc: '' });
-  const [generatingLabelPdf, setGeneratingLabelPdf] = useState(false);
-
-  const palletDossiers = useMemo(() => buildPalletMonthlyDossiers(palletReports), [palletReports]);
+  const palletPlan = useMemo(() => buildPalletBoxPlan(palletReports), [palletReports]);
 
   const palletMonths = useMemo(
     () =>
-      palletDossiers
+      palletPlan.filledDossiers
         .map(d => d.monthKey)
         .filter(Boolean)
         .reverse(),
-    [palletDossiers]
+    [palletPlan]
   );
 
-  const uniquePalletsCount = useMemo(
-    () => new Set(palletReports.map(r => (r.palletCode || '').trim()).filter(Boolean)).size,
-    [palletReports]
+  // Labels state (3 modes matching Operations & Comments: automatic, manual, single-dossier)
+  const [labelMode, setLabelMode] = useState<'automatic' | 'manual' | 'single-dossier'>(
+    labelInitialBoxCode?.includes(':') ? 'single-dossier' : 'automatic'
   );
+  const [selectedLabelBoxCode, setSelectedLabelBoxCode] = useState<string>('P10');
+  const [manualLabelBoxCode, setManualLabelBoxCode] = useState<string>('P10');
+  const [manualStartYear, setManualStartYear] = useState<number>(palletPlan.anchorYear);
+  const [manualStartMonth, setManualStartMonth] = useState<number>(8);
+  const [singleDossierBoxCode, setSingleDossierBoxCode] = useState<string>('P10');
+  const [singleDossierNumber, setSingleDossierNumber] = useState<number>(
+    labelInitialBoxCode?.includes(':') ? Number(labelInitialBoxCode.split(':')[1]) || 1 : 1
+  );
+  const [singleFromDate, setSingleFromDate] = useState<string>(() => monthBoundsIso(palletPlan.anchorYear, 8).start);
+  const [singleToDate, setSingleToDate] = useState<string>(() => monthBoundsIso(palletPlan.anchorYear, 8).end);
+  const [activePreviewIndex, setActivePreviewIndex] = useState(0);
+  const [previewScale, setPreviewScale] = useState(1.0);
+  const [generatingLabelPdf, setGeneratingLabelPdf] = useState(false);
+  const [preparingPrint, setPreparingPrint] = useState(false);
+  const [printItems, setPrintItems] = useState<PrintableLabelItem[] | null>(null);
 
   useEffect(() => {
-    if (palletDossiers.length === 0) {
-      setSelectedDossierCode('');
-      return;
-    }
-    if (labelInitialBoxCode && palletDossiers.some(d => d.dossierCode === labelInitialBoxCode)) {
-      setSelectedDossierCode(labelInitialBoxCode);
-      setLabelMode('dossier');
-      return;
-    }
-    setSelectedDossierCode(prev =>
-      palletDossiers.some(d => d.dossierCode === prev) ? prev : palletDossiers[0].dossierCode
-    );
-  }, [palletDossiers, labelInitialBoxCode]);
+    setManualStartYear(palletPlan.anchorYear);
+    const cleanInitial =
+      labelInitialBoxCode && labelInitialBoxCode !== 'D41' && labelInitialBoxCode !== 'C1'
+        ? labelInitialBoxCode
+        : '';
+    const hasColon = cleanInitial.includes(':');
+    const boxPart = cleanInitial ? cleanInitial.split(':')[0] : '';
+    const dPart = hasColon ? Number(cleanInitial.split(':')[1]) || 1 : 0;
 
-  const activeLabelData: LabelData = useMemo(() => {
-    if (labelMode === 'dossier' && palletDossiers.length > 0) {
-      const d = palletDossiers.find(x => x.dossierCode === selectedDossierCode) || palletDossiers[0];
-      return {
-        type: 'box',
-        boxCode: d.dossierCode,
-        subtitle: 'PALLET DOSSIER',
-        fromJobId: d.dossierNumber,
-        toJobId: d.dossierNumber,
-        fromLabel: d.minDate ? formatShortLabelDate(d.minDate) : '—',
-        toLabel: d.maxDate ? formatShortLabelDate(d.maxDate) : '—',
-      };
+    if (hasColon && boxPart && dPart >= 1 && dPart <= 6) {
+      setLabelMode('single-dossier');
+      setSingleDossierBoxCode(boxPart);
+      setSingleDossierNumber(dPart);
+      const matched = palletPlan.dossiers.find(d => d.boxCode === boxPart && d.dossierNumber === dPart);
+      if (matched) {
+        setSingleFromDate(matched.periodStart);
+        setSingleToDate(matched.periodEnd);
+      } else {
+        const bNum = parseInt(boxPart.replace(/\D+/g, ''), 10);
+        const offsetMonths = (Number.isFinite(bNum) && bNum >= 10 ? bNum - 10 : 0) * 6 + (dPart - 1);
+        const bounds = monthBoundsIso(palletPlan.anchorYear, 8 + offsetMonths);
+        setSingleFromDate(bounds.start);
+        setSingleToDate(bounds.end);
+      }
+      return;
     }
-    return {
-      type: 'box',
-      boxCode: manualLabelCode.trim() || 'P1',
-      subtitle: 'PALLET DOSSIER',
-      fromJobId: 1,
-      toJobId: 1,
-      fromLabel: manualFromLabel.trim() || '01/01/26',
-      toLabel: manualToLabel.trim() || '31/01/26',
+
+    if (boxPart) {
+      setSelectedLabelBoxCode(boxPart);
+      setManualLabelBoxCode(boxPart);
+      setSingleDossierBoxCode(boxPart);
+      setLabelMode('automatic');
+      return;
+    }
+
+    if (palletPlan.boxes.length > 0) {
+      const firstBox = palletPlan.boxes[0].boxCode;
+      setSelectedLabelBoxCode(prev => (palletPlan.boxes.some(b => b.boxCode === prev) ? prev : firstBox));
+      setManualLabelBoxCode(prev => (prev && prev !== 'P10' ? prev : firstBox));
+      setSingleDossierBoxCode(prev => (prev && prev !== 'P10' ? prev : firstBox));
+    }
+  }, [palletPlan, labelInitialBoxCode]);
+
+  const activeLabels: LabelData[] = useMemo(() => {
+    if (labelMode === 'automatic') {
+      if (palletPlan.boxes.length > 0) {
+        const chosenBox = palletPlan.boxes.find(b => b.boxCode === selectedLabelBoxCode) || palletPlan.boxes[0];
+        return buildPalletBoxLabelPackage(chosenBox.boxCode, chosenBox.dossiers);
+      }
+      return buildPalletManualBoxPackage(selectedLabelBoxCode || 'P10', palletPlan.anchorYear, 8);
+    }
+    if (labelMode === 'manual') {
+      const code = manualLabelBoxCode.trim().toUpperCase() || 'P10';
+      return buildPalletManualBoxPackage(code, Number(manualStartYear) || palletPlan.anchorYear, Number(manualStartMonth) || 8);
+    }
+    const cleanBox = singleDossierBoxCode.trim().toUpperCase() || 'P10';
+    const dNum = Math.min(6, Math.max(1, Number(singleDossierNumber) || 1));
+    return [
+      {
+        type: 'dossier',
+        boxCode: cleanBox,
+        dossierNumber: dNum,
+        totalDossiers: 6,
+        fromJobId: dNum,
+        toJobId: dNum,
+        fromLabel: singleFromDate ? formatShortLabelDate(singleFromDate) : '—',
+        toLabel: singleToDate ? formatShortLabelDate(singleToDate) : '—',
+      },
+    ];
+  }, [
+    labelMode,
+    palletPlan,
+    selectedLabelBoxCode,
+    manualLabelBoxCode,
+    manualStartYear,
+    manualStartMonth,
+    singleDossierBoxCode,
+    singleDossierNumber,
+    singleFromDate,
+    singleToDate,
+  ]);
+
+  useEffect(() => {
+    if (activePreviewIndex >= activeLabels.length) {
+      setActivePreviewIndex(0);
+    }
+  }, [activeLabels.length, activePreviewIndex]);
+
+  // Isolated 100x50 mm thermal print portal styling
+  useEffect(() => {
+    if (!isPallet || activeTab !== 'labels' || !printItems || printItems.length === 0) return;
+
+    const styleEl = document.createElement('style');
+    styleEl.id = 'arms-thermal-label-print-style';
+    styleEl.textContent = `
+      @media print {
+        @page { size: 100mm 50mm; margin: 0; }
+        html, body { margin: 0 !important; padding: 0 !important; background: #ffffff !important; }
+        body > *:not(#arms-label-print-portal) { display: none !important; }
+        #arms-label-print-portal { display: block !important; position: static !important; margin: 0 !important; padding: 0 !important; }
+        #arms-label-print-portal * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    const cleanup = () => {
+      styleEl.remove();
+      setPrintItems(null);
+      setPreparingPrint(false);
+      window.removeEventListener('afterprint', cleanup);
     };
-  }, [labelMode, palletDossiers, selectedDossierCode, manualLabelCode, manualFromLabel, manualToLabel]);
 
-  useEffect(() => {
-    if (!isPallet || activeTab !== 'labels') return;
-    let active = true;
-    getMonochromeLabelLogos().then(res => {
-      if (active) setLogos(res);
+    window.addEventListener('afterprint', cleanup);
+
+    let timerId = 0;
+    const rafId = window.requestAnimationFrame(() => {
+      timerId = window.setTimeout(() => {
+        window.print();
+      }, 90);
     });
-    generateQRDataURL(getQRCodeText(activeLabelData)).then(url => {
-      if (active) setQrDataUrl(url);
-    });
+
     return () => {
-      active = false;
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timerId);
+      window.removeEventListener('afterprint', cleanup);
+      styleEl.remove();
     };
-  }, [isPallet, activeTab, activeLabelData]);
+  }, [isPallet, activeTab, printItems]);
 
   if (!isPallet) {
     return (
@@ -178,10 +283,22 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   if (activeTab === 'import') {
     return <PalletHandoverViews mode="import" onNavigate={onNavigate} />;
   }
-  if (activeTab === 'archive') {
+  if (
+    activeTab === 'archive' ||
+    activeTab === 'boxes' ||
+    activeTab === 'box-detail' ||
+    activeTab === 'dossiers' ||
+    activeTab === 'dossier-detail' ||
+    activeTab === 'projects'
+  ) {
     return (
       <PalletHandoverViews
         mode="archive"
+        activeTab={activeTab}
+        selectedBoxId={selectedBoxId}
+        selectedDossierId={selectedDossierId}
+        onSelectBox={id => onSelectBox?.(id)}
+        onSelectDossier={id => onSelectDossier?.(id)}
         onNavigate={onNavigate}
         dateFrom={palletDateFrom}
         dateTo={palletDateTo}
@@ -255,7 +372,7 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   const palletNormalRows = dashboardFilteredRows.length - palletOverCapacityRows;
   const normalPct = dashboardFilteredRows.length > 0 ? (palletNormalRows / dashboardFilteredRows.length) * 100 : 0;
   const filteredUniquePalletsCount = new Set(dashboardFilteredRows.map(r => (r.palletCode || '').trim()).filter(Boolean)).size;
-  const filteredDossiersCount = buildPalletMonthlyDossiers(dashboardFilteredRows).length;
+  const dashboardFilteredPlan = buildPalletBoxPlan(dashboardFilteredRows);
 
   const theme = {
     sectionTitle: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Reports',
@@ -267,15 +384,15 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
     accentBorderFocus: 'focus:border-[#D97706] focus:ring-[#D97706]',
     accentHex: '#D97706',
     reportsTitle: isAr ? 'مركز تقارير الباليت' : 'Pallet Reports Center',
-    labelsTitle: isAr ? 'طباعة ليبلات الباليت' : 'Pallet Thermal Labels',
+    labelsTitle: isAr ? 'طباعة الليبلات الحرارية (100×50 مم)' : 'Thermal Labels (100×50 mm)',
   };
 
   const quickActions = [
     {
-      id: 'archive',
-      label: isAr ? 'فتح الأرشيف' : 'Open Archive',
-      icon: FolderArchive,
-      onClick: () => onNavigate('archive'),
+      id: 'boxes',
+      label: isAr ? 'البوكسات (P10+)' : 'Boxes (P10+)',
+      icon: Archive,
+      onClick: () => onNavigate('boxes'),
     },
     {
       id: 'labels',
@@ -392,11 +509,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                 <h2 className="text-sm font-extrabold text-slate-900 dark:text-white">
                   {isAr ? 'تصفية البيانات' : 'Filter Archive Data'}
                 </h2>
-                <p className="text-[11px] text-slate-500 dark:text-neutral-400">
-                  {isAr
-                    ? 'حدد الفترة الزمنية (من تاريخ / إلى تاريخ) والحالة لعرض النتائج.'
-                    : 'Select a date range (From / To) and status to filter results.'}
-                </p>
               </div>
             </div>
 
@@ -574,22 +686,24 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
 
             <button
               type="button"
-              onClick={() => onNavigate('labels')}
+              onClick={() => onNavigate('boxes')}
               className="p-5 text-start bg-white dark:bg-[#111111] hover:bg-slate-50/80 dark:hover:bg-neutral-900/60 transition-colors group"
             >
               <div className="flex items-center justify-between text-xs font-medium text-slate-500 dark:text-neutral-400">
-                <span>{isAr ? 'الدوسيهات الشهرية' : 'Monthly Dossiers'}</span>
-                <Printer className={`w-3.5 h-3.5 ${theme.accentText}`} />
+                <span>{isAr ? 'البوكسات والدوسيهات' : 'Boxes & Dossiers'}</span>
+                <Archive className={`w-3.5 h-3.5 ${theme.accentText}`} />
               </div>
               <div className="mt-2 text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tabular-nums">
-                {filteredDossiersCount.toLocaleString()}
+                {dashboardFilteredPlan.boxes.length.toLocaleString()}
               </div>
               <div className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                {filteredDossiersCount > 0
-                  ? `P1 → P${palletDossiers.length}`
+                {dashboardFilteredPlan.filledDossiers.length > 0
+                  ? `${dashboardFilteredPlan.filledDossiers.length} ${isAr ? 'دوسيه مفعّل' : 'active dossiers'} · ${
+                      palletPlan.boxes[0]?.boxCode || 'P10'
+                    }${palletPlan.boxes.length > 1 ? ` → ${palletPlan.boxes[palletPlan.boxes.length - 1].boxCode}` : ''}`
                   : isAr
-                  ? 'لا توجد دوسيهات'
-                  : 'No dossiers'}
+                  ? 'لا توجد بوكسات'
+                  : 'No boxes'}
               </div>
             </button>
           </div>
@@ -651,15 +765,6 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                       ? 'لا توجد نتائج مطابقة للبحث أو التاريخ المحدد'
                       : 'No records match your search or date filter'}
                   </div>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    {palletReports.length === 0
-                      ? isAr
-                        ? 'قم باستيراد ملف Excel أو إضافة سجل يدوياً لبدء أرشفة الباليتات.'
-                        : 'Import an Excel workbook or add a record manually to start archiving pallets.'
-                      : isAr
-                      ? 'جرّب تعديل كلمات البحث أو الفترة الزمنية.'
-                      : 'Try adjusting your search keywords or date range.'}
-                  </p>
                   {palletReports.length === 0 && canEdit && (
                     <button
                       type="button"
@@ -865,6 +970,11 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   if (activeTab === 'reports') {
     const reportTemplates = [
       {
+        id: 'distribution' as const,
+        label: isAr ? 'تقرير توزيع البوكسات والدوسيهات' : 'Boxes & Dossiers Distribution',
+        titleEn: 'Boxes & Dossiers Distribution',
+      },
+      {
         id: 'summary' as const,
         label: isAr ? 'ملخص تسليم الباليتات' : 'Pallet Handover Summary',
         titleEn: 'Pallet Handover Summary Report',
@@ -885,14 +995,16 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
     const reportQuery = reportSearch.trim().toLowerCase();
 
     const filteredRows = palletReports.filter(r => {
+      const meta = palletPlan.rowMetaById.get(r.id);
+      if (reportBoxFilter !== 'all' && meta?.boxCode !== reportBoxFilter) return false;
       const dt = (r.deliveryDate || r.inspectionDate || '').slice(0, 10);
-      const month = r.archiveMonth || dt.slice(0, 7);
+      const month = meta?.monthKey || r.archiveMonth || dt.slice(0, 7);
       if (reportMonthFilter !== 'all' && month !== reportMonthFilter) return false;
       if (reportDateFrom && (!dt || dt < reportDateFrom)) return false;
       if (reportDateTo && (!dt || dt > reportDateTo)) return false;
       if (selectedReportTab === 'audit' && r.capacityStatus !== 'over-capacity') return false;
       if (!reportQuery) return true;
-      const text = `${r.palletCode} ${r.jobCode || r.linkedBoxes} ${r.deliveredBy || r.custodian} ${r.deliveryStatus || ''} ${dt}`.toLowerCase();
+      const text = `${meta?.boxCode || ''} ${meta?.dossierId || ''} ${r.palletCode} ${r.jobCode || r.linkedBoxes} ${r.deliveredBy || r.custodian} ${r.deliveryStatus || ''} ${dt}`.toLowerCase();
       return text.includes(reportQuery);
     });
 
@@ -930,16 +1042,86 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         .values()
     ).sort((a, b) => b.deliveryDate.localeCompare(a.deliveryDate) || a.palletCode.localeCompare(b.palletCode));
 
+    const formatEnMonthYear = (monthKey: string): string => {
+      const m = /^(\d{4})-(\d{2})$/.exec(monthKey);
+      if (!m) return monthKey;
+      try {
+        return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(
+          new Date(Number(m[1]), Number(m[2]) - 1, 1)
+        );
+      } catch {
+        return monthKey;
+      }
+    };
+
+    const hasSubFilter = Boolean(reportMonthFilter !== 'all' || reportDateFrom || reportDateTo || reportQuery);
+    const matchedPlanBoxes = palletPlan.boxes
+      .filter(b => reportBoxFilter === 'all' || b.boxCode === reportBoxFilter)
+      .filter(b => {
+        if (!hasSubFilter) return true;
+        if (reportQuery && b.boxCode.toLowerCase().includes(reportQuery)) return true;
+        return b.dossiers.some(d => {
+          if (reportMonthFilter !== 'all' && d.monthKey !== reportMonthFilter) return false;
+          if (reportDateFrom && d.periodEnd < reportDateFrom) return false;
+          if (reportDateTo && d.periodStart > reportDateTo) return false;
+          if (!reportQuery) return true;
+          const mLabel = formatEnMonthYear(d.monthKey).toLowerCase();
+          return (
+            d.id.toLowerCase().includes(reportQuery) ||
+            d.monthKey.toLowerCase().includes(reportQuery) ||
+            mLabel.includes(reportQuery) ||
+            d.rows.some(r =>
+              `${r.palletCode} ${r.jobCode || r.linkedBoxes} ${r.deliveredBy || r.custodian}`
+                .toLowerCase()
+                .includes(reportQuery)
+            )
+          );
+        });
+      });
+
+    const unifiedPalletDistributionItems: UnifiedDistributionBox[] = matchedPlanBoxes.map(b => ({
+      boxCode: b.boxCode,
+      spanLabel: `${formatShortLabelDate(b.periodStart)} → ${formatShortLabelDate(b.periodEnd)}`,
+      tagLabel: '6 Dossiers (Monthly)',
+      metricsLabel: `${b.palletsCount} Pallets · ${b.totalBoxes} Boxes · ${b.recordsCount} Rec${
+        b.overCapacityCount > 0 ? ` · ${b.overCapacityCount} Over-36` : ''
+      }`,
+      status: b.status,
+      totalSlots: 6,
+      dossiers: b.dossiers.map(d => ({
+        id: d.id,
+        dossierNumber: d.dossierNumber,
+        spanLabel: `${formatShortLabelDate(d.periodStart)} → ${formatShortLabelDate(d.periodEnd)}`,
+        subtitleTag: formatEnMonthYear(d.monthKey),
+        metricsLabel: `${d.palletsCount} Pallets · ${d.totalBoxes} Boxes · ${d.rows.length} Rec`,
+        status: d.status,
+      })),
+    }));
+
     const totalBoxesFiltered = filteredRows.reduce((s, r) => s + (r.boxesCount || r.boxCount || 0), 0);
     const totalPalletsFiltered = new Set(filteredRows.map(r => r.palletCode).filter(Boolean)).size;
 
     const scopeLabel =
-      reportMonthFilter === 'all'
-        ? isAr
-          ? 'All Months'
-          : 'All Months'
-        : `Month ${reportMonthFilter}`;
-    const totalSummaryDisplay = `${filteredRows.length} Records · ${totalBoxesFiltered} Boxes · ${totalPalletsFiltered} Pallets`;
+      reportBoxFilter !== 'all'
+        ? `Box ${reportBoxFilter}`
+        : reportMonthFilter !== 'all'
+        ? `Month ${reportMonthFilter}`
+        : selectedReportTab === 'distribution'
+        ? 'All Boxes'
+        : 'All Months';
+
+    const distTotalDossiers = unifiedPalletDistributionItems.reduce(
+      (s, b) => s + (b.totalSlots || b.dossiers.length),
+      0
+    );
+    const distTotalPallets = matchedPlanBoxes.reduce((s, b) => s + b.palletsCount, 0);
+    const distTotalRecords = matchedPlanBoxes.reduce((s, b) => s + b.recordsCount, 0);
+
+    const totalSummaryDisplay =
+      selectedReportTab === 'distribution'
+        ? `${unifiedPalletDistributionItems.length} Boxes (${distTotalDossiers} Dossiers · ${distTotalPallets} Pallets · ${distTotalRecords} Records)`
+        : `${filteredRows.length} Records · ${totalBoxesFiltered} Boxes · ${totalPalletsFiltered} Pallets`;
+
     const formattedPrintDate = new Date().toLocaleString('en-US', {
       month: '2-digit',
       day: '2-digit',
@@ -950,6 +1132,20 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
     });
 
     const handleExportExcel = () => {
+      if (selectedReportTab === 'distribution') {
+        exportUnifiedDistributionExcel({
+          reportTitle: 'Boxes & Dossiers Distribution',
+          scopeLabel,
+          totalSummary: totalSummaryDisplay,
+          items: unifiedPalletDistributionItems,
+          preparedBy: currentUser?.name || 'System Admin',
+          printDate: formattedPrintDate,
+          filePrefix: 'ARMS_Pallet',
+        });
+        showToast(isAr ? 'تم تصدير تقرير Excel بنجاح.' : 'Excel report exported successfully.', 'success');
+        return;
+      }
+
       const sheetRows =
         selectedReportTab === 'summary'
           ? summaryGroups.map((g, idx) => ({
@@ -961,16 +1157,20 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
               'Delivered By': g.deliveredBy,
               Capacity: g.capacityStatus === 'over-capacity' ? 'Over 36 Boxes' : 'Normal',
             }))
-          : filteredRows.map((r, idx) => ({
-              '#': idx + 1,
-              Pallet: r.palletCode,
-              'Job Code': r.jobCode || r.linkedBoxes,
-              Boxes: r.boxesCount || r.boxCount || 0,
-              'Delivery Date': r.deliveryDate || r.inspectionDate || '—',
-              'Delivered By': r.deliveredBy || r.custodian || '—',
-              'Delivery Status': r.deliveryStatus || '—',
-              Capacity: r.capacityStatus === 'over-capacity' ? 'Over 36 Boxes' : 'Normal',
-            }));
+          : filteredRows.map((r, idx) => {
+              const meta = palletPlan.rowMetaById.get(r.id);
+              return {
+                '#': idx + 1,
+                'Box / Dossier': meta ? `${meta.boxCode} / ${meta.dossierId}` : '—',
+                Pallet: r.palletCode,
+                'Job Code': r.jobCode || r.linkedBoxes,
+                Boxes: r.boxesCount || r.boxCount || 0,
+                'Delivery Date': r.deliveryDate || r.inspectionDate || '—',
+                'Delivered By': r.deliveredBy || r.custodian || '—',
+                'Delivery Status': r.deliveryStatus || '—',
+                Capacity: r.capacityStatus === 'over-capacity' ? 'Over 36 Boxes' : 'Normal',
+              };
+            });
       const ws = XLSX.utils.json_to_sheet(sheetRows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Pallet Report');
@@ -983,6 +1183,20 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
       if (exportingPdf) return;
       setExportingPdf(true);
       try {
+        if (selectedReportTab === 'distribution') {
+          const saved = await exportUnifiedDistributionPDF({
+            reportTitle: 'Boxes & Dossiers Distribution',
+            scopeLabel,
+            totalSummary: totalSummaryDisplay,
+            items: unifiedPalletDistributionItems,
+            preparedBy: currentUser?.name || 'System Admin',
+            printDate: formattedPrintDate,
+            filePrefix: 'ARMS_Pallet',
+          });
+          showToast(isAr ? `تم حفظ التقرير: ${saved}` : `Saved PDF: ${saved}`, 'success');
+          return;
+        }
+
         const columns =
           selectedReportTab === 'summary'
             ? [
@@ -1046,7 +1260,12 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
       }
     };
 
-    const previewRowsCount = selectedReportTab === 'summary' ? summaryGroups.length : filteredRows.length;
+    const previewRowsCount =
+      selectedReportTab === 'distribution'
+        ? unifiedPalletDistributionItems.length
+        : selectedReportTab === 'summary'
+        ? summaryGroups.length
+        : filteredRows.length;
 
     return (
       <div className="space-y-6">
@@ -1080,7 +1299,7 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => window.print()}
+              onClick={() => (selectedReportTab === 'distribution' ? setPrintingDistribution(true) : window.print())}
               className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white rounded-lg transition-colors whitespace-nowrap ${theme.accentBg}`}
             >
               <Printer className="w-3.5 h-3.5" />
@@ -1118,10 +1337,11 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                   <Filter className={`w-3.5 h-3.5 ${theme.accentText}`} />
                   <span>{isAr ? 'تصفية التقرير' : 'Filter Report'}</span>
                 </span>
-                {(reportMonthFilter !== 'all' || reportDateFrom || reportDateTo || reportSearch) && (
+                {(reportBoxFilter !== 'all' || reportMonthFilter !== 'all' || reportDateFrom || reportDateTo || reportSearch) && (
                   <button
                     type="button"
                     onClick={() => {
+                      setReportBoxFilter('all');
                       setReportMonthFilter('all');
                       setReportDateFrom('');
                       setReportDateTo('');
@@ -1133,6 +1353,26 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                     <span>{isAr ? 'إعادة ضبط' : 'Reset'}</span>
                   </button>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-neutral-400 mb-1">
+                  {isAr ? 'البوكس' : 'Box'}
+                </label>
+                <select
+                  value={reportBoxFilter}
+                  onChange={e => setReportBoxFilter(e.target.value)}
+                  className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none ${theme.accentBorderFocus}`}
+                >
+                  <option value="all">
+                    {isAr ? `كل البوكسات (${palletPlan.boxes.length})` : `All Boxes (${palletPlan.boxes.length})`}
+                  </option>
+                  {palletPlan.boxes.map(b => (
+                    <option key={b.boxCode} value={b.boxCode}>
+                      {b.boxCode} ({isAr ? 'شهري · 6 دوسيهات' : 'Monthly · 6 Dossiers'})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1190,7 +1430,7 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
                     type="text"
                     value={reportSearch}
                     onChange={e => setReportSearch(e.target.value)}
-                    placeholder={isAr ? 'باليت، كود مشروع، سلم الباليت...' : 'Pallet, job code, delivered by...'}
+                    placeholder={isAr ? 'بوكس، باليت، كود مشروع، سلم الباليت...' : 'Box, pallet, job code, delivered by...'}
                     className={`w-full ps-8 pe-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg text-slate-800 dark:text-neutral-200 focus:outline-none ${theme.accentBorderFocus}`}
                   />
                 </div>
@@ -1198,145 +1438,164 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
             </div>
           </aside>
 
-          <div className="lg:col-span-8 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-neutral-800 print:hidden">
-              <h2 className="text-sm font-bold text-slate-800 dark:text-white">{activeTemplate.label}</h2>
-              <span className="text-xs text-slate-400 tabular-nums">
-                {previewRowsCount} {isAr ? 'صف' : 'rows'}
-              </span>
-            </div>
-
-            <div className="bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5 print:border-0 print:p-0 print:bg-white">
-              <div
-                dir="ltr"
-                className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-3.5 print:border-0 print:shadow-none"
-              >
-                <div className="flex items-center justify-between gap-4 pb-1">
-                  <img src={logoColor} alt="Intercom" className="h-7 sm:h-8 w-auto object-contain" />
-                  <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight text-center min-w-0 leading-snug">
-                    {activeTemplate.titleEn}
-                  </h3>
-                  <img src={armsLogoLight} alt="ARMS" className="h-7 sm:h-9 w-auto object-contain" />
+          <div className="lg:col-span-8 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4 print:p-0 print:border-0 print:bg-white">
+            {selectedReportTab === 'distribution' ? (
+              <UnifiedDistributionSheet
+                titleAr="تقرير توزيع البوكسات والدوسيهات"
+                titleEn="Boxes & Dossiers Distribution"
+                scopeLabel={scopeLabel}
+                totalSummary={totalSummaryDisplay}
+                items={unifiedPalletDistributionItems}
+                preparedBy={currentUser?.name || 'System Admin'}
+                printDate={formattedPrintDate}
+                language={language}
+                accentFocusBorderClass="focus:border-[#D97706]"
+                accentTextHoverClass="hover:border-[#D97706] hover:text-[#D97706]"
+                printing={printingDistribution}
+                onPrintComplete={() => setPrintingDistribution(false)}
+              />
+            ) : (
+              <>
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-neutral-800 print:hidden">
+                  <h2 className="text-sm font-bold text-slate-800 dark:text-white">{activeTemplate.label}</h2>
+                  <span className="text-xs text-slate-400 tabular-nums">
+                    {previewRowsCount} {isAr ? 'صف' : 'rows'}
+                  </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-600 shrink-0">Scope :</span>
-                      <span className="font-semibold text-slate-900">{scopeLabel}</span>
+                <div className="bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5 print:border-0 print:p-0 print:bg-white">
+                  <div
+                    dir="ltr"
+                    className="bg-white text-slate-900 border border-slate-300 rounded-lg overflow-hidden shadow-md mx-auto max-w-[794px] p-5 sm:p-6 space-y-3.5 print:border-0 print:shadow-none"
+                  >
+                    <div className="flex items-center justify-between gap-4 pb-1">
+                      <img src={logoColor} alt="Intercom" className="h-7 sm:h-8 w-auto object-contain" />
+                      <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight text-center min-w-0 leading-snug">
+                        {activeTemplate.titleEn}
+                      </h3>
+                      <img src={armsLogoLight} alt="ARMS" className="h-7 sm:h-9 w-auto object-contain" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-600 shrink-0">Total :</span>
-                      <span className="font-semibold text-slate-900 tabular-nums">{totalSummaryDisplay}</span>
-                    </div>
-                  </div>
 
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-600 shrink-0">Print Date :</span>
-                      <span className="text-slate-900 tabular-nums">{formattedPrintDate}</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1.5 text-[12px] bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 shrink-0">Scope :</span>
+                          <span className="font-semibold text-slate-900">{scopeLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 shrink-0">Total :</span>
+                          <span className="font-semibold text-slate-900 tabular-nums">{totalSummaryDisplay}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 shrink-0">Print Date :</span>
+                          <span className="text-slate-900 tabular-nums">{formattedPrintDate}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-600 shrink-0">Prepared By :</span>
+                          <span className="font-semibold text-slate-900 truncate">
+                            {currentUser?.name || 'System Admin'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-600 shrink-0">Prepared By :</span>
-                      <span className="font-semibold text-slate-900 truncate">
-                        {currentUser?.name || 'System Admin'}
+
+                    <div className="border-b-2 border-slate-700" />
+
+                    {selectedReportTab === 'summary' ? (
+                      <table className="w-full border-collapse text-[12px] text-left">
+                        <thead>
+                          <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                            <th className="border border-slate-400 px-2 py-1.5 w-9 text-center">#</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Pallet</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Delivery Date</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Jobs</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5 text-center">Boxes</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Delivered By</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Capacity</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {summaryGroups.length > 0 ? (
+                            summaryGroups.slice(0, 60).map((g, idx) => (
+                              <tr key={`${g.palletCode}-${g.deliveryDate}-${idx}`}>
+                                <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 font-bold">{g.palletCode}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 tabular-nums">{g.deliveryDate || '—'}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 font-mono text-[11px]">{g.jobs.join(', ')}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums font-semibold">
+                                  {g.totalBoxes}
+                                </td>
+                                <td className="border border-slate-300 px-2.5 py-1.5">{g.deliveredBy || '—'}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5">
+                                  {g.capacityStatus === 'over-capacity' ? 'Over 36' : 'Normal'}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="border border-slate-300 py-10 text-center text-slate-500">
+                                No matching pallet records
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <table className="w-full border-collapse text-[12px] text-left">
+                        <thead>
+                          <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
+                            <th className="border border-slate-400 px-2 py-1.5 w-9 text-center">#</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Pallet</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Job Code</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5 text-center">Boxes</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Date</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Delivered By</th>
+                            <th className="border border-slate-400 px-2.5 py-1.5">Capacity</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredRows.length > 0 ? (
+                            filteredRows.slice(0, 60).map((r, idx) => (
+                              <tr key={r.id}>
+                                <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 font-bold">{r.palletCode}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 font-mono">{r.jobCode || r.linkedBoxes}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums font-semibold">
+                                  {r.boxesCount || r.boxCount}
+                                </td>
+                                <td className="border border-slate-300 px-2.5 py-1.5 tabular-nums">
+                                  {r.deliveryDate || r.inspectionDate || '—'}
+                                </td>
+                                <td className="border border-slate-300 px-2.5 py-1.5">{r.deliveredBy || r.custodian || '—'}</td>
+                                <td className="border border-slate-300 px-2.5 py-1.5">
+                                  {r.capacityStatus === 'over-capacity' ? 'Over 36' : 'Normal'}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="border border-slate-300 py-10 text-center text-slate-500">
+                                No matching pallet records
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+
+                    <div className="pt-2.5 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Intercom ARMS · Pallet Handover</span>
+                      <span className="tabular-nums">
+                        Showing {Math.min(60, previewRowsCount)} of {previewRowsCount}
                       </span>
                     </div>
                   </div>
                 </div>
-
-                <div className="border-b-2 border-slate-700" />
-
-                {selectedReportTab === 'summary' ? (
-                  <table className="w-full border-collapse text-[12px] text-left">
-                    <thead>
-                      <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
-                        <th className="border border-slate-400 px-2 py-1.5 w-9 text-center">#</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Pallet</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Delivery Date</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Jobs</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5 text-center">Boxes</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Delivered By</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Capacity</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summaryGroups.length > 0 ? (
-                        summaryGroups.slice(0, 60).map((g, idx) => (
-                          <tr key={`${g.palletCode}-${g.deliveryDate}-${idx}`}>
-                            <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 font-bold">{g.palletCode}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 tabular-nums">{g.deliveryDate || '—'}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 font-mono text-[11px]">{g.jobs.join(', ')}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums font-semibold">
-                              {g.totalBoxes}
-                            </td>
-                            <td className="border border-slate-300 px-2.5 py-1.5">{g.deliveredBy || '—'}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5">
-                              {g.capacityStatus === 'over-capacity' ? 'Over 36' : 'Normal'}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={7} className="border border-slate-300 py-10 text-center text-slate-500">
-                            No matching pallet records
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                ) : (
-                  <table className="w-full border-collapse text-[12px] text-left">
-                    <thead>
-                      <tr className="bg-[#D9D9D9] text-slate-900 font-bold">
-                        <th className="border border-slate-400 px-2 py-1.5 w-9 text-center">#</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Pallet</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Job Code</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5 text-center">Boxes</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Date</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Delivered By</th>
-                        <th className="border border-slate-400 px-2.5 py-1.5">Capacity</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRows.length > 0 ? (
-                        filteredRows.slice(0, 60).map((r, idx) => (
-                          <tr key={r.id}>
-                            <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums">{idx + 1}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 font-bold">{r.palletCode}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 font-mono">{r.jobCode || r.linkedBoxes}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 text-center tabular-nums font-semibold">
-                              {r.boxesCount || r.boxCount}
-                            </td>
-                            <td className="border border-slate-300 px-2.5 py-1.5 tabular-nums">
-                              {r.deliveryDate || r.inspectionDate || '—'}
-                            </td>
-                            <td className="border border-slate-300 px-2.5 py-1.5">{r.deliveredBy || r.custodian || '—'}</td>
-                            <td className="border border-slate-300 px-2.5 py-1.5">
-                              {r.capacityStatus === 'over-capacity' ? 'Over 36' : 'Normal'}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={7} className="border border-slate-300 py-10 text-center text-slate-500">
-                            No matching pallet records
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                )}
-
-                <div className="pt-2.5 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Intercom ARMS · Pallet Handover</span>
-                  <span className="tabular-nums">
-                    Showing {Math.min(60, previewRowsCount)} of {previewRowsCount}
-                  </span>
-                </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1344,36 +1603,35 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
   }
 
   /* -------------------- 3. LABELS VIEW -------------------- */
+  const currentPreviewLabel = activeLabels[activePreviewIndex] || activeLabels[0];
+
   const handleDownloadLabelPdf = async () => {
-    if (generatingLabelPdf) return;
+    if (generatingLabelPdf || activeLabels.length === 0) return;
     setGeneratingLabelPdf(true);
     try {
-      const pdf = await generateLabelsPDF([activeLabelData]);
-      const savedName = `ARMS_Pallet_${activeLabelData.boxCode}_Label.pdf`;
+      const pdf = await generateLabelsPDF(activeLabels);
+      const savedName =
+        labelMode === 'single-dossier'
+          ? `ARMS_Pallet_${activeLabels[0].boxCode}_Dossier_${singleDossierNumber}.pdf`
+          : `ARMS_Pallet_${activeLabels[0].boxCode}_${activeLabels.length}Pages.pdf`;
       pdf.save(savedName);
-      showToast(isAr ? `تم تحميل الليبل: ${savedName}` : `Downloaded label PDF: ${savedName}`, 'success');
+      showToast(isAr ? `تم تحميل ملف الليبلات: ${savedName}` : `Downloaded label PDF: ${savedName}`, 'success');
     } catch {
-      showToast(isAr ? 'تعذر إنشاء ملف PDF لليبل.' : 'Failed generating label PDF.', 'error');
+      showToast(isAr ? 'تعذر إنشاء ملف PDF لليبلات.' : 'Failed generating label PDF.', 'error');
     } finally {
       setGeneratingLabelPdf(false);
     }
   };
 
-  const handleDownloadAllDossiersPdf = async () => {
-    if (generatingLabelPdf || palletDossiers.length === 0) return;
+  const handleDownloadAllBoxesPdf = async () => {
+    if (generatingLabelPdf || palletPlan.boxes.length === 0) return;
     setGeneratingLabelPdf(true);
     try {
-      const allLabels: LabelData[] = palletDossiers.map(d => ({
-        type: 'box',
-        boxCode: d.dossierCode,
-        subtitle: 'PALLET DOSSIER',
-        fromJobId: d.dossierNumber,
-        toJobId: d.dossierNumber,
-        fromLabel: d.minDate ? formatShortLabelDate(d.minDate) : '—',
-        toLabel: d.maxDate ? formatShortLabelDate(d.maxDate) : '—',
-      }));
+      const allLabels = palletPlan.boxes.flatMap(b => buildPalletBoxLabelPackage(b.boxCode, b.dossiers));
       const pdf = await generateLabelsPDF(allLabels);
-      const savedName = `ARMS_Pallet_Dossiers_P1_to_P${palletDossiers.length}.pdf`;
+      const firstCode = palletPlan.boxes[0].boxCode;
+      const lastCode = palletPlan.boxes[palletPlan.boxes.length - 1].boxCode;
+      const savedName = `ARMS_Pallet_AllBoxes_${firstCode}_to_${lastCode}.pdf`;
       pdf.save(savedName);
       showToast(
         isAr ? `تم تحميل ${allLabels.length} ليبل: ${savedName}` : `Downloaded ${allLabels.length} labels: ${savedName}`,
@@ -1385,6 +1643,36 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
       setGeneratingLabelPdf(false);
     }
   };
+
+  const handleDirectPrint = async (labelsToPrint: LabelData[]) => {
+    if (preparingPrint || labelsToPrint.length === 0) return;
+    setPreparingPrint(true);
+    try {
+      const [qrUrls, monoLogos] = await Promise.all([
+        Promise.all(labelsToPrint.map(l => generateQRDataURL(getQRCodeText(l)))),
+        getMonochromeLabelLogos(),
+      ]);
+      setPrintItems(
+        labelsToPrint.map((label, idx) => ({
+          label,
+          qrSrc: qrUrls[idx],
+          intercomLogoSrc: monoLogos.intercomSrc,
+          armsLogoSrc: monoLogos.armsSrc,
+        }))
+      );
+    } catch {
+      showToast(isAr ? 'تعذر تجهيز الليبلات للطباعة.' : 'Failed preparing labels for print.', 'error');
+      setPreparingPrint(false);
+    }
+  };
+
+  const monthOptions = Array.from({ length: 12 }, (_, idx) => {
+    const m = idx + 1;
+    const label = safeMonthLabel(`${palletPlan.anchorYear}-${String(m).padStart(2, '0')}`, isAr).replace(/\s*\d{4}$/, '');
+    return { value: m, label };
+  });
+
+  const selectedAutomaticBox = palletPlan.boxes.find(b => b.boxCode === selectedLabelBoxCode) || palletPlan.boxes[0];
 
   return (
     <div className="space-y-6">
@@ -1398,203 +1686,387 @@ export const SectionPagesView: React.FC<SectionPagesViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {palletDossiers.length > 1 && (
+          {palletPlan.boxes.length > 1 && (
             <button
               type="button"
               disabled={generatingLabelPdf}
-              onClick={() => void handleDownloadAllDossiersPdf()}
+              onClick={() => void handleDownloadAllBoxesPdf()}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#B45309] dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-950/70 rounded-lg transition-colors whitespace-nowrap disabled:opacity-50"
             >
               <FileDown className="w-3.5 h-3.5" />
               <span>
                 {isAr
-                  ? `تحميل كل الدوسيهات (${palletDossiers.length})`
-                  : `Export All Dossiers (${palletDossiers.length})`}
+                  ? `كل البوكسات PDF (${palletPlan.boxes.length * 7} ليبل)`
+                  : `All Boxes PDF (${palletPlan.boxes.length * 7})`}
               </span>
             </button>
           )}
           <button
             type="button"
-            disabled={generatingLabelPdf}
-            onClick={() => void handleDownloadLabelPdf()}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-neutral-200 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-900 rounded-lg transition-colors whitespace-nowrap disabled:opacity-50"
+            onClick={() => void handleDirectPrint(activeLabels)}
+            disabled={preparingPrint}
+            className="group inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-slate-700 dark:text-neutral-200 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-[#D97706] hover:border-[#D97706] hover:text-white rounded-lg transition-colors shadow-xs disabled:opacity-50 whitespace-nowrap"
           >
-            <FileDown className={`w-3.5 h-3.5 ${theme.accentText}`} />
+            <Printer className={`w-3.5 h-3.5 ${theme.accentText} group-hover:text-white transition-colors`} />
             <span>
-              {generatingLabelPdf
+              {preparingPrint
                 ? isAr
-                  ? 'جاري الإنشاء...'
-                  : 'Generating...'
+                  ? 'جاري التجهيز...'
+                  : 'Preparing...'
+                : activeLabels.length === 1
+                ? isAr
+                  ? 'طباعة مباشرة (صفحة 1)'
+                  : 'Print Label (1 Page)'
                 : isAr
-                ? 'تحميل PDF (100×50mm)'
-                : 'Export PDF (100×50mm)'}
+                ? `طباعة مباشرة (${activeLabels.length} صفحات)`
+                : `Print All (${activeLabels.length} Pages)`}
             </span>
           </button>
           <button
             type="button"
-            onClick={() => window.print()}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg transition-colors whitespace-nowrap ${theme.accentBg}`}
+            disabled={generatingLabelPdf}
+            onClick={() => void handleDownloadLabelPdf()}
+            className="group inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-slate-700 dark:text-neutral-200 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-[#E52225] hover:border-[#E52225] hover:text-white rounded-lg transition-colors shadow-xs disabled:opacity-50 whitespace-nowrap"
           >
-            <Printer className="w-3.5 h-3.5" />
-            <span>{isAr ? 'طباعة' : 'Print'}</span>
+            <FileDown className="w-3.5 h-3.5 text-[#E52225] dark:text-red-400 group-hover:text-white transition-colors" />
+            <span>
+              {generatingLabelPdf
+                ? isAr
+                  ? 'جاري تجهيز PDF...'
+                  : 'Generating PDF...'
+                : activeLabels.length === 1
+                ? isAr
+                  ? 'تحميل PDF (صفحة 1)'
+                  : 'Download 1-Page PDF'
+                : isAr
+                ? `تحميل PDF (${activeLabels.length} صفحات)`
+                : `Download ${activeLabels.length}-Page PDF`}
+            </span>
           </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-4 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 space-y-4 print:hidden">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-              {isAr ? 'إعدادات ليبل الدوسيه' : 'Dossier Label Setup'}
-            </h2>
-            {palletDossiers.length > 0 && (
-              <div className="flex rounded-lg bg-slate-100 dark:bg-neutral-900 p-0.5 text-[11px] font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setLabelMode('dossier')}
-                  className={`px-2.5 py-1 rounded-md transition-colors ${
-                    labelMode === 'dossier'
-                      ? `${theme.accentBgSolid} text-white`
-                      : 'text-slate-600 dark:text-neutral-400'
-                  }`}
-                >
-                  {isAr ? 'الدوسيهات' : 'Dossiers'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLabelMode('manual')}
-                  className={`px-2.5 py-1 rounded-md transition-colors ${
-                    labelMode === 'manual'
-                      ? `${theme.accentBgSolid} text-white`
-                      : 'text-slate-600 dark:text-neutral-400'
-                  }`}
-                >
-                  {isAr ? 'يدوي' : 'Manual'}
-                </button>
+        {/* Left Controls */}
+        <div className="lg:col-span-5 space-y-4 print:hidden">
+          <div className="bg-white dark:bg-[#111111] p-4 rounded-xl border border-slate-200 dark:border-neutral-800 space-y-3">
+            <label className="block text-xs font-bold text-slate-900 dark:text-white">
+              {isAr ? 'طريقة تحديد الليبل' : 'Generation Mode'}
+            </label>
+
+            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-neutral-900 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setLabelMode('automatic')}
+                className={`py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
+                  labelMode === 'automatic'
+                    ? 'bg-white dark:bg-[#111111] text-[#B45309] dark:text-amber-400 shadow-xs font-bold'
+                    : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {isAr ? 'آلي (من بوكس)' : 'Automatic'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLabelMode('manual')}
+                className={`py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
+                  labelMode === 'manual'
+                    ? 'bg-white dark:bg-[#111111] text-[#B45309] dark:text-amber-400 shadow-xs font-bold'
+                    : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {isAr ? 'يدوي' : 'Manual'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLabelMode('single-dossier')}
+                className={`py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
+                  labelMode === 'single-dossier'
+                    ? 'bg-white dark:bg-[#111111] text-[#B45309] dark:text-amber-400 shadow-xs font-bold'
+                    : 'text-slate-600 dark:text-neutral-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {isAr ? 'دوسيه منفرد' : 'Single Dossier'}
+              </button>
+            </div>
+
+            {labelMode === 'automatic' && (
+              <div className="space-y-3 pt-2">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                    {isAr ? 'اختر البوكس' : 'Select Box'}
+                  </label>
+                  <select
+                    value={selectedAutomaticBox?.boxCode || selectedLabelBoxCode}
+                    onChange={e => setSelectedLabelBoxCode(e.target.value)}
+                    className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                  >
+                    {palletPlan.boxes.length === 0 ? (
+                      <option value="P10">Box P10</option>
+                    ) : (
+                      palletPlan.boxes.map(b => (
+                        <option key={b.boxCode} value={b.boxCode}>
+                          Box {b.boxCode} ({formatShortLabelDate(b.periodStart)} → {formatShortLabelDate(b.periodEnd)})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {labelMode === 'manual' && (
+              <div className="space-y-3 pt-2">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                    {isAr ? 'كود البوكس (Box Code)' : 'Box Code'}
+                  </label>
+                  <input
+                    type="text"
+                    value={manualLabelBoxCode}
+                    onChange={e => setManualLabelBoxCode(e.target.value)}
+                    placeholder="P10"
+                    className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg uppercase font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'سنة البداية' : 'Start Year'}
+                    </label>
+                    <input
+                      type="number"
+                      value={manualStartYear}
+                      onChange={e => setManualStartYear(Number(e.target.value) || new Date().getFullYear())}
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'شهر البداية' : 'Start Month'}
+                    </label>
+                    <select
+                      value={manualStartMonth}
+                      onChange={e => setManualStartMonth(Number(e.target.value))}
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    >
+                      {monthOptions.map(m => (
+                        <option key={m.value} value={m.value}>
+                          {m.value} - {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-500 bg-slate-50 dark:bg-neutral-900 p-2.5 rounded-lg tabular-nums">
+                  {activeLabels[0]?.fromLabel} → {activeLabels[0]?.toLabel}
+                </div>
+              </div>
+            )}
+
+            {labelMode === 'single-dossier' && (
+              <div className="space-y-3 pt-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'كود البوكس' : 'Box Code'}
+                    </label>
+                    <input
+                      type="text"
+                      value={singleDossierBoxCode}
+                      onChange={e => {
+                        const code = e.target.value;
+                        setSingleDossierBoxCode(code);
+                        const match = palletPlan.dossiers.find(
+                          d => d.boxCode === code.trim().toUpperCase() && d.dossierNumber === singleDossierNumber
+                        );
+                        if (match) {
+                          setSingleFromDate(match.periodStart);
+                          setSingleToDate(match.periodEnd);
+                        }
+                      }}
+                      placeholder="P10"
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg uppercase font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'رقم الدوسيه (1-6)' : 'Dossier # (1-6)'}
+                    </label>
+                    <select
+                      value={singleDossierNumber}
+                      onChange={e => {
+                        const dNum = Number(e.target.value);
+                        setSingleDossierNumber(dNum);
+                        const clean = singleDossierBoxCode.trim().toUpperCase();
+                        const match = palletPlan.dossiers.find(d => d.boxCode === clean && d.dossierNumber === dNum);
+                        if (match) {
+                          setSingleFromDate(match.periodStart);
+                          setSingleToDate(match.periodEnd);
+                        } else {
+                          const bNum = parseInt(clean.replace(/\D+/g, ''), 10);
+                          const offsetMonths = (Number.isFinite(bNum) && bNum >= 10 ? bNum - 10 : 0) * 6 + (dNum - 1);
+                          const bounds = monthBoundsIso(palletPlan.anchorYear, 8 + offsetMonths);
+                          setSingleFromDate(bounds.start);
+                          setSingleToDate(bounds.end);
+                        }
+                      }}
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    >
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <option key={num} value={num}>
+                          Dossier {num}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'من تاريخ (FROM)' : 'From Date'}
+                    </label>
+                    <input
+                      type="date"
+                      value={singleFromDate}
+                      onChange={e => e.target.value && setSingleFromDate(e.target.value)}
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                      {isAr ? 'إلى تاريخ (TO)' : 'To Date'}
+                    </label>
+                    <input
+                      type="date"
+                      value={singleToDate}
+                      onChange={e => e.target.value && setSingleToDate(e.target.value)}
+                      className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${theme.accentBorderFocus}`}
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </div>
-
-          {labelMode === 'dossier' && palletDossiers.length > 0 ? (
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-400 mb-1">
-                  {isAr ? 'اختر الدوسيه الشهري' : 'Select Monthly Dossier'}
-                </label>
-                <select
-                  value={selectedDossierCode}
-                  onChange={e => setSelectedDossierCode(e.target.value)}
-                  className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:ring-1 ${theme.accentBorderFocus}`}
-                >
-                  {palletDossiers.map(d => (
-                    <option key={d.dossierCode} value={d.dossierCode}>
-                      {d.dossierCode} · {safeMonthLabel(d.monthKey, isAr)} (
-                      {d.minDate ? formatShortLabelDate(d.minDate) : '—'} →{' '}
-                      {d.maxDate ? formatShortLabelDate(d.maxDate) : '—'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {(() => {
-                const chosen = palletDossiers.find(d => d.dossierCode === selectedDossierCode) || palletDossiers[0];
-                return (
-                  <div className="rounded-lg bg-slate-50 dark:bg-neutral-900/70 border border-slate-200 dark:border-neutral-800 p-3 text-xs space-y-1.5">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">{isAr ? 'رقم الدوسيه:' : 'Dossier Code:'}</span>
-                      <span className="font-mono font-extrabold text-[#B45309] dark:text-amber-400">
-                        {chosen.dossierCode}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">{isAr ? 'الشهر:' : 'Month:'}</span>
-                      <span className="font-bold">{safeMonthLabel(chosen.monthKey, isAr)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">FROM:</span>
-                      <span className="font-mono font-semibold">
-                        {chosen.minDate ? formatShortLabelDate(chosen.minDate) : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">TO:</span>
-                      <span className="font-mono font-semibold">
-                        {chosen.maxDate ? formatShortLabelDate(chosen.maxDate) : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between pt-1 border-t border-slate-200/70 dark:border-neutral-800">
-                      <span className="text-slate-500">{isAr ? 'السجلات / الباليتات:' : 'Records / Pallets:'}</span>
-                      <span className="font-bold tabular-nums">
-                        {chosen.rows.length.toLocaleString()} · {chosen.palletsCount.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">{isAr ? 'إجمالي البوكسات:' : 'Total Boxes:'}</span>
-                      <span className="font-bold tabular-nums">{chosen.totalBoxes.toLocaleString()}</span>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-400 mb-1">
-                  {isAr ? 'رقم الدوسيه' : 'Dossier Code'}
-                </label>
-                <input
-                  type="text"
-                  value={manualLabelCode}
-                  onChange={e => setManualLabelCode(e.target.value)}
-                  placeholder="P1"
-                  className={`w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:ring-1 ${theme.accentBorderFocus}`}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-400 mb-1">
-                    FROM ({isAr ? 'من تاريخ' : 'Start Date'})
-                  </label>
-                  <input
-                    type="text"
-                    value={manualFromLabel}
-                    onChange={e => setManualFromLabel(e.target.value)}
-                    placeholder="01/01/26"
-                    className={`w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:ring-1 ${theme.accentBorderFocus}`}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-neutral-400 mb-1">
-                    TO ({isAr ? 'إلى تاريخ' : 'End Date'})
-                  </label>
-                  <input
-                    type="text"
-                    value={manualToLabel}
-                    onChange={e => setManualToLabel(e.target.value)}
-                    placeholder="31/01/26"
-                    className={`w-full px-3 py-2 text-xs font-mono bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:ring-1 ${theme.accentBorderFocus}`}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
-        <div className="lg:col-span-8 bg-slate-100/80 dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-6 sm:p-10 flex items-center justify-center">
-          <LabelCanvasPreview data={activeLabelData} responsive />
+        {/* Right Preview & 7-Page Carousel */}
+        <div className="lg:col-span-7 space-y-4 print:hidden">
+          <div className="bg-white dark:bg-[#111111] p-5 rounded-xl border border-slate-200 dark:border-neutral-800 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-neutral-800">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {isAr ? 'المعاينة المباشرة' : 'Live Preview'}
+                </h2>
+                <div className="text-[11px] text-slate-500">
+                  {currentPreviewLabel?.type === 'box'
+                    ? `Box Label · ${currentPreviewLabel.boxCode}`
+                    : `Dossier ${currentPreviewLabel?.dossierNumber} Label · Box ${currentPreviewLabel?.boxCode}`}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {activeLabels.length > 1 && currentPreviewLabel && (
+                  <button
+                    type="button"
+                    onClick={() => void handleDirectPrint([currentPreviewLabel])}
+                    disabled={preparingPrint}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-colors disabled:opacity-50 text-[#B45309] dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 hover:bg-[#D97706] hover:text-white"
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span>{isAr ? 'طباعة هذا الليبل' : 'Print This Label'}</span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-neutral-900 p-1 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewScale(prev => Math.max(0.7, prev - 0.1))}
+                    className="p-1 text-slate-600 dark:text-neutral-300 hover:text-slate-900 dark:hover:text-white rounded"
+                    title="Zoom Out"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="text-[10px] font-bold px-1.5 tabular-nums">{Math.round(previewScale * 100)}%</span>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewScale(prev => Math.min(1.4, prev + 0.1))}
+                    className="p-1 text-slate-600 dark:text-neutral-300 hover:text-slate-900 dark:hover:text-white rounded"
+                    title="Zoom In"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-slate-100 dark:bg-black rounded-xl flex items-center justify-center overflow-auto min-h-[260px]">
+              {currentPreviewLabel && <LabelCanvasPreview data={currentPreviewLabel} scale={previewScale} />}
+            </div>
+
+            {activeLabels.length > 1 && (
+              <div>
+                <div className="text-xs font-bold text-slate-700 dark:text-neutral-300 mb-2">
+                  {isAr ? `صفحات الليبلات (${activeLabels.length})` : `Label Pages (${activeLabels.length})`}
+                </div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {activeLabels.map((l, idx) => (
+                    <button
+                      type="button"
+                      key={idx}
+                      onClick={() => setActivePreviewIndex(idx)}
+                      className={`p-2 rounded-lg border text-center transition-all ${
+                        activePreviewIndex === idx
+                          ? 'border-[#D97706] bg-[#D97706] text-white font-bold shadow-xs'
+                          : 'border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-900 text-slate-700 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      <div className="text-[10px]">{l.type === 'box' ? 'Box' : `D${l.dossierNumber}`}</div>
+                      <div className="text-[9px] opacity-80 truncate tabular-nums">{l.fromLabel || '—'}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {typeof document !== 'undefined' &&
+      {/* Dedicated 100x50 mm print sheet portal */}
+      {printItems &&
+        typeof document !== 'undefined' &&
         createPortal(
-          <div className="hidden print:block fixed inset-0 bg-white z-[9999]">
-            <div className="w-[100mm] h-[50mm]">
-              <LabelVectorSvg
-                data={activeLabelData}
-                qrSrc={qrDataUrl}
-                intercomLogoSrc={logos.intercomSrc}
-                armsLogoSrc={logos.armsSrc}
-              />
-            </div>
+          <div
+            id="arms-label-print-portal"
+            dir="ltr"
+            className="hidden print:block"
+            style={{
+              WebkitPrintColorAdjust: 'exact',
+              printColorAdjust: 'exact',
+            }}
+          >
+            {printItems.map((item, idx) => (
+              <div
+                key={`${item.label.boxCode}-${item.label.type}-${item.label.dossierNumber || 0}-${idx}`}
+                style={{
+                  width: '100mm',
+                  height: '50mm',
+                  overflow: 'hidden',
+                  backgroundColor: '#ffffff',
+                  pageBreakAfter: idx < printItems.length - 1 ? 'always' : 'auto',
+                  breakAfter: idx < printItems.length - 1 ? 'page' : 'auto',
+                }}
+              >
+                <LabelVectorSvg
+                  data={item.label}
+                  qrSrc={item.qrSrc}
+                  intercomLogoSrc={item.intercomLogoSrc}
+                  armsLogoSrc={item.armsLogoSrc}
+                />
+              </div>
+            ))}
           </div>,
           document.body
         )}

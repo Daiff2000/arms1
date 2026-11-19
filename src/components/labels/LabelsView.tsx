@@ -282,9 +282,6 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
   const accentCarouselActive = isMinutes
     ? 'border-[#E52225] bg-[#E52225] text-white font-bold shadow-xs'
     : 'border-[#0B56A8] bg-[#0B56A8] text-white font-bold shadow-xs';
-  const accentSoftBox = isMinutes
-    ? 'bg-red-50/70 dark:bg-neutral-900 border-[#E52225]/15 dark:border-neutral-800'
-    : 'bg-[#EAF2FB]/60 dark:bg-neutral-900 border-[#0B56A8]/15 dark:border-neutral-800';
   const accentPrintBtn = isMinutes
     ? 'text-[#E52225] dark:text-red-400 bg-red-50 dark:bg-red-950/40 hover:bg-[#E52225] hover:text-white'
     : 'text-[#0B56A8] dark:text-blue-400 bg-[#EAF2FB] dark:bg-blue-950/40 hover:bg-[#0B56A8] hover:text-white';
@@ -446,29 +443,6 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                     )}
                   </select>
                 </div>
-
-                <div className={`p-3 rounded-lg text-xs space-y-1 border ${accentSoftBox}`}>
-                  <div className={`font-bold ${accentText}`}>
-                    {isAr
-                      ? `حزمة الليبلات الناتجة (${activeLabels.length} صفحات):`
-                      : `Output Package (${activeLabels.length} Pages):`}
-                  </div>
-                  {isMinutes ? (
-                    <div className="text-[11px] text-slate-600 dark:text-neutral-300 tabular-nums" dir="ltr">
-                      · Page 1: Box {activeLabels[0]?.boxCode} ({activeLabels[0]?.fromLabel} → {activeLabels[0]?.toLabel})
-                      <br />
-                      {activeLabels.length <= 3
-                        ? `· Pages 2-${activeLabels.length}: Dossiers 1 to 2 (${isAr ? 'شهر لكل دوسيه' : '1 month per dossier'})`
-                        : `· Pages 2-7: Dossiers 1 to 6 (${isAr ? 'أسبوع تشغيل لكل دوسيه' : '1 week per dossier'})`}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] text-slate-600 dark:text-neutral-300 tabular-nums" dir="ltr">
-                      · Page 1: Box {currentBox?.boxCode || selectedBoxCode} (#{currentBox?.firstJobId} → #{currentBox?.lastJobId})
-                      <br />
-                      · Pages 2-7: Dossiers 1 to 6 (50 projects each)
-                    </div>
-                  )}
-                </div>
               </div>
             )}
 
@@ -514,13 +488,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                       />
                     </div>
                     <div className="text-[11px] text-slate-500 bg-slate-50 dark:bg-neutral-900 p-2.5 rounded-lg tabular-nums">
-                      {activeLabels.length <= 3
-                        ? isAr
-                          ? `بوكس شهري (شهران / دوسيهان): من ${activeLabels[0]?.fromLabel} إلى ${activeLabels[0]?.toLabel}`
-                          : `Monthly box (2 months): ${activeLabels[0]?.fromLabel} → ${activeLabels[0]?.toLabel}`
-                        : isAr
-                        ? `النظام يحسب تلقائياً 6 أسابيع (أحد → خميس): من ${activeLabels[0]?.fromLabel} إلى ${activeLabels[0]?.toLabel}`
-                        : `Auto-calculates 6 weeks (Sun → Thu): ${activeLabels[0]?.fromLabel} → ${activeLabels[0]?.toLabel}`}
+                      {activeLabels[0]?.fromLabel} → {activeLabels[0]?.toLabel}
                     </div>
                   </>
                 ) : (
@@ -537,9 +505,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                       />
                     </div>
                     <div className="text-[11px] text-slate-500 bg-slate-50 dark:bg-neutral-900 p-2.5 rounded-lg tabular-nums">
-                      {isAr
-                        ? `النظام يحسب تلقائيًا آخر رقم (+299): #${Number(manualFirstJobId) + 299} ونطاقات الـ 6 دوسيهات (+49 لكل دوسيه).`
-                        : `System auto-calculates last ID (+299): #${Number(manualFirstJobId) + 299} and all 6 dossier spans (+49 each).`}
+                      #{manualFirstJobId} → #{Number(manualFirstJobId) + 299}
                     </div>
                   </>
                 )}
@@ -609,38 +575,33 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                 </div>
 
                 {isMinutes ? (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
-                          {isAr ? 'من تاريخ (FROM)' : 'From Date'}
-                        </label>
-                        <input
-                          type="date"
-                          value={singleFromDate}
-                          onChange={e => {
-                            const val = e.target.value;
-                            if (!val) return;
-                            setSingleFromDate(val);
-                            setSingleToDate(weekEndOf(weekStartOf(val)));
-                          }}
-                          className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
-                          {isAr ? 'إلى تاريخ (TO)' : 'To Date'}
-                        </label>
-                        <input
-                          type="date"
-                          value={singleToDate}
-                          onChange={e => e.target.value && setSingleToDate(e.target.value)}
-                          className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
-                        />
-                      </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                        {isAr ? 'من تاريخ (FROM)' : 'From Date'}
+                      </label>
+                      <input
+                        type="date"
+                        value={singleFromDate}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          setSingleFromDate(val);
+                          setSingleToDate(weekEndOf(weekStartOf(val)));
+                        }}
+                        className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
+                      />
                     </div>
-                    <div className="text-[11px] text-slate-400 tabular-nums" dir="ltr">
-                      FROM {formatShortLabelDate(singleFromDate)} → TO {formatShortLabelDate(singleToDate)}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 dark:text-neutral-400 mb-1">
+                        {isAr ? 'إلى تاريخ (TO)' : 'To Date'}
+                      </label>
+                      <input
+                        type="date"
+                        value={singleToDate}
+                        onChange={e => e.target.value && setSingleToDate(e.target.value)}
+                        className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
+                      />
                     </div>
                   </div>
                 ) : (
@@ -655,9 +616,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
                       className={`w-full px-3 py-2 text-xs bg-slate-50 dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-lg tabular-nums font-bold focus:outline-none ${accentFocus}`}
                     />
                     <div className="text-[11px] text-slate-400 mt-1 tabular-nums">
-                      {isAr
-                        ? `النطاق المحسوب: من #${singleDossierFirstJobId} إلى #${Number(singleDossierFirstJobId) + 49}`
-                        : `Calculated range: #${singleDossierFirstJobId} → #${Number(singleDossierFirstJobId) + 49}`}
+                      #{singleDossierFirstJobId} → #{Number(singleDossierFirstJobId) + 49}
                     </div>
                   </div>
                 )}
@@ -672,7 +631,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-neutral-800">
               <div>
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {isAr ? 'المعاينة المباشرة (مطابقة 1:1 للطباعة)' : 'Live 1:1 Print Preview'}
+                  {isAr ? 'المعاينة المباشرة' : 'Live Preview'}
                 </h2>
                 <div className="text-[11px] text-slate-500">
                   {currentPreviewLabel.type === 'box'
@@ -730,9 +689,7 @@ export const LabelsView: React.FC<LabelsViewProps> = ({ initialBoxCode }) => {
             {activeLabels.length > 1 && (
               <div>
                 <div className="text-xs font-bold text-slate-700 dark:text-neutral-300 mb-2">
-                  {isAr
-                    ? `صفحات الملف (${activeLabels.length} صفحات - اختر للمعاينة):`
-                    : `Package Pages (${activeLabels.length} - Click to inspect):`}
+                  {isAr ? `صفحات الليبلات (${activeLabels.length})` : `Label Pages (${activeLabels.length})`}
                 </div>
                 <div className={`grid gap-1.5 ${activeLabels.length <= 3 ? 'grid-cols-3' : 'grid-cols-7'}`}>
                   {activeLabels.map((l, idx) => (

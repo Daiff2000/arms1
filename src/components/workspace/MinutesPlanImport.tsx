@@ -162,7 +162,7 @@ export const MinutesPlanImport: React.FC = () => {
           <div className="flex flex-wrap items-end gap-3 text-xs">
             <label className="space-y-1"><span className="block text-slate-500">{isAr ? 'بادئة كود البوكس' : 'Box prefix'}</span>
               <input value={prefix} onChange={e => setPrefix(e.target.value)} className="w-20 px-2 py-1.5 border border-slate-200 dark:border-neutral-800 rounded-lg bg-white dark:bg-neutral-900" /></label>
-            <label className="space-y-1"><span className="block text-slate-500">{isAr ? 'رقم أول بوكس (لو القسم فاضي)' : 'First box no. (if empty)'}</span>
+            <label className="space-y-1"><span className="block text-slate-500">{isAr ? 'رقم أول بوكس' : 'First box no.'}</span>
               <input type="number" min={1} value={startBox} onChange={e => setStartBox(parseInt(e.target.value, 10) || 13)} disabled={minutesArchive.boxes.length > 0} className="w-24 px-2 py-1.5 border border-slate-200 dark:border-neutral-800 rounded-lg bg-white dark:bg-neutral-900 disabled:opacity-50" /></label>
           </div>
 

@@ -65,10 +65,8 @@ export const DossierDetailView: React.FC<DossierDetailViewProps> = ({
                 {dossier.status}
               </span>
             </div>
-            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-              {language === 'ar'
-                ? `النطاق التسلسلي: من #${dossier.fromJobId} إلى #${dossier.toJobId} (50 مشروع)`
-                : `Sequence Range: #${dossier.fromJobId} → #${dossier.toJobId} (50 Project Slots)`}
+            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5 tabular-nums">
+              #{dossier.fromJobId} → #{dossier.toJobId}
             </p>
           </div>
         </div>
@@ -92,32 +90,24 @@ export const DossierDetailView: React.FC<DossierDetailViewProps> = ({
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'المشاريع المفقودة' : 'Missing (Gaps)'}</span>
           <div className="text-xl font-bold text-[#E52225] tabular-nums">{dossier.missingCount}</div>
-          <span className="text-[10px] text-[#E52225]/80">{language === 'ar' ? 'فجوات مثبتة' : 'Proven gaps'}</span>
         </div>
 
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'قيد الانتظار' : 'Pending'}</span>
           <div className="text-xl font-bold text-slate-700 dark:text-neutral-300 tabular-nums">{dossier.pendingCount}</div>
-          <span className="text-[10px] text-slate-400">{language === 'ar' ? 'لم تستورد' : 'Awaiting delivery'}</span>
         </div>
 
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'إجمالي السعة' : 'Total Slots'}</span>
           <div className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">50</div>
-          <span className="text-[10px] text-slate-400">Strictly 50 slots</span>
         </div>
       </div>
 
       <div className="bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-              {language === 'ar' ? 'مخطط الـ 50 خانة مشروع (50 Slots Matrix)' : '50 Project Slots Matrix'}
-            </h2>
-            <p className="text-[11px] text-slate-400">
-              {language === 'ar' ? 'اضغط على أي خانة لعرض تفاصيل المشروع' : 'Click any slot to inspect project metadata'}
-            </p>
-          </div>
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+            {language === 'ar' ? 'مخطط الـ 50 مشروع' : '50 Project Slots'}
+          </h2>
 
           <div className="flex items-center gap-1 flex-wrap">
             {(['all', 'Archived', 'Missing', 'Pending'] as const).map(s => (

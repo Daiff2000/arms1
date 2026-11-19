@@ -263,7 +263,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             {/* Clean Header */}
             <div className="px-5 py-4 border-b border-slate-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                {isAr ? 'حالة البوكسات الحالية (300 مشروع)' : 'Current Boxes Status (300 Slots)'}
+                {isAr ? 'حالة البوكسات' : 'Boxes Status'}
               </h2>
 
               <div className="flex items-center gap-3">

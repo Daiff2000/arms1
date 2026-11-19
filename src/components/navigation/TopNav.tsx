@@ -29,6 +29,7 @@ import { WorkspaceModule } from '../../types';
 import { IntercomLogo } from '../common/IntercomLogo';
 import { ArmsLogo } from '../common/ArmsLogo';
 import { PalletBoxesIcon, ReportPaperIcon } from '../common/WorkspaceIcons';
+import { buildPalletBoxPlan } from '../../utils/palletArchivePlan';
 
 export type ActiveTab =
   | 'dashboard'
@@ -130,7 +131,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   const isOperations = activeWorkspace !== 'pallet-archive' && activeWorkspace !== 'minutes-archive';
   const isPallet = activeWorkspace === 'pallet-archive';
   const isMinutes = activeWorkspace === 'minutes-archive';
-  const hasArchiveHierarchy = isOperations || isMinutes;
+  const hasArchiveHierarchy = isOperations || isMinutes || isPallet;
 
   const isArchiveActive =
     activeTab === 'archive' ||
@@ -198,7 +199,7 @@ export const TopNav: React.FC<TopNavProps> = ({
       fullLabel: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Archive',
       boxCount:
         palletReports.length > 0
-          ? new Set(palletReports.map(r => r.palletCode).filter(Boolean)).size
+          ? buildPalletBoxPlan(palletReports).boxes.length
           : palletArchive.boxes.length,
       icon: PalletBoxesIcon,
       iconColorClass: 'text-[#D97706] dark:text-amber-400',
@@ -429,6 +430,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       activeTab === 'boxes' || activeTab === 'box-detail'
                         ? isMinutes
                           ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : isPallet
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300 font-bold'
                           : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
@@ -437,6 +440,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
                         isMinutes
                           ? 'bg-red-50 dark:bg-red-950/50 text-[#E52225] dark:text-red-400'
+                          : isPallet
+                          ? 'bg-amber-50 dark:bg-amber-950/50 text-[#B45309] dark:text-amber-400'
                           : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/25 text-[#0B56A8] dark:text-blue-400'
                       }`}
                     >
@@ -449,6 +454,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                           ? language === 'ar'
                             ? '6 دوسيهات (أسابيع)'
                             : '6 Dossiers (Weeks)'
+                          : isPallet
+                          ? language === 'ar'
+                            ? '6 دوسيهات شهرياً · يبدأ من P10'
+                            : '6 Monthly Dossiers · Starts P10'
                           : language === 'ar'
                           ? '6 دوسيهات · 300 مشروع'
                           : '6 Dossiers · 300 Projects'}
@@ -466,6 +475,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       activeTab === 'dossiers' || activeTab === 'dossier-detail'
                         ? isMinutes
                           ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : isPallet
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300 font-bold'
                           : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
@@ -480,6 +491,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                           ? language === 'ar'
                             ? 'دوسيه واحد لكل أسبوع'
                             : 'One Week per Dossier'
+                          : isPallet
+                          ? language === 'ar'
+                            ? 'شهر واحد لكل دوسيه (أغسطس+)'
+                            : 'One Month per Dossier (Aug+)'
                           : language === 'ar'
                           ? '50 مشروع لكل دوسيه'
                           : '50 Projects per Dossier'}
@@ -497,6 +512,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       activeTab === 'projects'
                         ? isMinutes
                           ? 'bg-red-50 dark:bg-red-950/40 text-[#E52225] dark:text-red-300 font-bold'
+                          : isPallet
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-[#B45309] dark:text-amber-300 font-bold'
                           : 'bg-[#EAF2FB] dark:bg-[#0B56A8]/20 text-[#0B56A8] dark:text-blue-300 font-bold'
                         : 'text-slate-700 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-900'
                     }`}
@@ -510,6 +527,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                           ? language === 'ar'
                             ? 'الفروع'
                             : 'Branches'
+                          : isPallet
+                          ? language === 'ar'
+                            ? 'الباليتات والسجلات'
+                            : 'Pallets & Records'
                           : language === 'ar'
                           ? 'المشاريع'
                           : 'Projects'}
@@ -519,6 +540,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                           ? language === 'ar'
                             ? 'اسم الفرع · الإرسالية · تاريخ التشغيل'
                             : 'Branch · Shipment · Start Date'
+                          : isPallet
+                          ? language === 'ar'
+                            ? 'الباليت · كود المشروع · سلم الباليت'
+                            : 'Pallet · Job Code · Delivered By'
                           : 'Job ID & Date Approved'}
                       </div>
                     </div>
@@ -820,6 +845,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                       ? language === 'ar'
                         ? 'الفروع'
                         : 'Branches'
+                      : isPallet
+                      ? language === 'ar'
+                        ? 'الباليتات'
+                        : 'Pallets'
                       : language === 'ar'
                       ? 'المشاريع'
                       : 'Projects'}

@@ -357,11 +357,6 @@ export const DossiersView: React.FC<DossiersViewProps> = ({ onNavigate, onSelect
                 <FolderArchive className="w-4 h-4 text-[#0B56A8]" />
                 <span>{isAr ? `تحديث حالة الدوسيه ${editingDossier.id}` : `Update Dossier ${editingDossier.id} Status`}</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                {isAr
-                  ? `سيتم تطبيق الحالة الجديدة على الدوسيه بالكامل (${editingDossier.totalProjects} خانة).`
-                  : `Applies to all ${editingDossier.totalProjects} slots in this dossier.`}
-              </p>
             </div>
 
             <form onSubmit={handleSaveSingleDossierStatus} className="space-y-3">

@@ -199,18 +199,26 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
 
       {/* Upload Zone */}
       {!parseResult && (
-        <div
+        <label
           onDragOver={e => {
             e.preventDefault();
-            setDragActive(true);
+            e.stopPropagation();
+            if (!loading) setDragActive(true);
           }}
-          onDragLeave={() => setDragActive(false)}
+          onDragLeave={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            setDragActive(false);
+          }}
           onDrop={e => {
             e.preventDefault();
+            e.stopPropagation();
             setDragActive(false);
-            handleFiles(e.dataTransfer.files);
+            if (!loading) void handleFiles(e.dataTransfer.files);
           }}
-          className={`p-10 border-2 border-dashed rounded-2xl text-center transition-all bg-white dark:bg-[#111111] ${
+          className={`block p-10 border-2 border-dashed rounded-2xl text-center transition-all bg-white dark:bg-[#111111] ${
+            loading ? 'cursor-wait opacity-75' : 'cursor-pointer'
+          } ${
             dragActive
               ? 'border-[#0B56A8] bg-[#EAF2FB]/40 dark:bg-blue-950/20'
               : 'border-slate-300 dark:border-neutral-800 hover:border-[#0B56A8]/60'
@@ -220,32 +228,36 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({ onNavigate }) =>
             type="file"
             ref={fileInputRef}
             accept=".xlsx, .xls, .csv"
-            onChange={e => handleFiles(e.target.files)}
+            disabled={loading}
+            onChange={e => {
+              const selected = e.target.files ? Array.from(e.target.files) : null;
+              e.target.value = '';
+              if (selected && selected.length > 0) {
+                const dt = new DataTransfer();
+                selected.forEach(f => dt.items.add(f));
+                void handleFiles(dt.files);
+              }
+            }}
             className="hidden"
           />
 
-          <div className="w-12 h-12 mx-auto rounded-full bg-[#EAF2FB] dark:bg-neutral-900 flex items-center justify-center text-[#0B56A8] dark:text-blue-400 mb-3">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-[#EAF2FB] dark:bg-neutral-900 flex items-center justify-center text-[#0B56A8] dark:text-blue-400 mb-3">
             <Upload className="w-6 h-6" />
           </div>
 
           <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1">
-            {language === 'ar' ? 'اسحب ملف Excel هنا أو اضغط للاختيار' : 'Drag and drop Excel file here or click to browse'}
+            {loading
+              ? language === 'ar'
+                ? 'جاري القراءة...'
+                : 'Reading...'
+              : language === 'ar'
+              ? 'اسحب ملف Excel هنا أو اضغط للاختيار'
+              : 'Drag and drop Excel file here or click to choose'}
           </h3>
-          <p className="text-xs text-slate-500 dark:text-neutral-400 mb-4">
-            {language === 'ar'
-              ? 'يدعم .xlsx و .xls و .csv — شيت "بيانات المشاريع" (حتى 50MB)'
-              : 'Supports .xlsx, .xls, .csv — "بيانات المشاريع" sheet (up to 50MB)'}
+          <p className="text-xs text-slate-500 dark:text-neutral-400">
+            .xlsx · .xls · .csv
           </p>
-
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
-            className="px-4 py-2 text-xs font-semibold text-white bg-[#0B56A8] hover:bg-[#094488] rounded-lg transition-colors shadow-xs disabled:opacity-60"
-          >
-            {loading ? (language === 'ar' ? 'جاري القراءة...' : 'Reading...') : (language === 'ar' ? 'اختيار ملف من الجهاز' : 'Select File')}
-          </button>
-        </div>
+        </label>
       )}
 
       <UploadProgressBar progress={uploadProgress} accent="blue" isAr={language === 'ar'} />

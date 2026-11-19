@@ -20,6 +20,7 @@ import { PalletBoxesIcon, ReportPaperIcon } from '../common/WorkspaceIcons';
 import archiveReportsImg from '../../assets/images/portal_kraft_reports_archive_1794846311471.jpg';
 import palletReportsImg from '../../assets/images/portal_pallet_reports_1794845235798.jpg';
 import commentsArchiveImg from '../../assets/images/comments_branch_real_label_1794933915152.jpg';
+import { buildPalletBoxPlan } from '../../utils/palletArchivePlan';
 
 interface WorkspacePortalViewProps {
   onOpenProfile: (tab?: 'profile' | 'password') => void;
@@ -80,6 +81,7 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
   }, [darkMode]);
 
   const fmtCount = (n: number) => (archiveLoading ? '—' : n.toLocaleString('en-US'));
+  const palletPlan = buildPalletBoxPlan(palletReports);
 
   const workspaces: WorkspaceCardConfig[] = [
     {
@@ -115,28 +117,16 @@ export const WorkspacePortalView: React.FC<WorkspacePortalViewProps> = ({ onOpen
       title: isAr ? 'أرشفة تقارير تسليم الباليت' : 'Pallet Handover Archive',
       metrics: [
         {
+          label: isAr ? 'البوكسات' : 'Boxes',
+          value: fmtCount(palletReports.length > 0 ? palletPlan.boxes.length : palletArchive.boxes.length),
+        },
+        {
+          label: isAr ? 'الدوسيهات' : 'Dossiers',
+          value: fmtCount(palletReports.length > 0 ? palletPlan.filledDossiers.length : palletArchive.dossiers.length),
+        },
+        {
           label: isAr ? 'الباليتات' : 'Pallets',
-          value: fmtCount(
-            palletReports.length > 0
-              ? new Set(palletReports.map(r => r.palletCode).filter(Boolean)).size
-              : palletArchive.boxes.length
-          ),
-        },
-        {
-          label: isAr ? 'الشهور' : 'Months',
-          value: fmtCount(
-            palletReports.length > 0
-              ? new Set(
-                  palletReports
-                    .map(r => r.archiveMonth || r.deliveryDate?.slice(0, 7) || r.inspectionDate?.slice(0, 7))
-                    .filter(Boolean)
-                ).size
-              : palletArchive.dossiers.length
-          ),
-        },
-        {
-          label: isAr ? 'السجلات' : 'Records',
-          value: fmtCount(palletReports.length > 0 ? palletReports.length : palletArchive.projects.length),
+          value: fmtCount(palletReports.length > 0 ? palletPlan.pallets.length : palletArchive.projects.length),
         },
       ],
       image: palletReportsImg,

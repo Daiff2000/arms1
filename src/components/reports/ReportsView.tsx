@@ -13,10 +13,14 @@ import {
   BoxDirectoryItem,
   exportReportToExcel,
   exportReportToPDF,
+  exportUnifiedDistributionExcel,
+  exportUnifiedDistributionPDF,
   paginateReportRows,
   REPORT_BOXES_PER_PAGE,
   REPORT_ROWS_PER_PAGE,
+  UnifiedDistributionBox,
 } from '../../utils/reportExporter';
+import { UnifiedDistributionSheet } from './UnifiedDistributionSheet';
 
 export type ReportType =
   | 'archived-projects'
@@ -60,7 +64,7 @@ export const ReportsView: React.FC = () => {
     { id: 'inprogress-boxes', titleAr: 'تقرير البوكسات الجارية', titleEn: 'Inprogress Boxes', group: 'boxes' },
     { id: 'dossier-report', titleAr: 'تقرير الدوسيهات الشامل', titleEn: 'Dossiers Overview', group: 'boxes' },
     { id: 'box-details-report', titleAr: 'تقرير تفاصيل البوكسات والدوسيهات', titleEn: 'Box & Dossier Details', group: 'boxes' },
-    { id: 'boxes-dossiers-ranges', titleAr: 'تقرير البوكسات ورينجات الدوسيهات', titleEn: 'Boxes & Dossiers Ranges', group: 'boxes' },
+    { id: 'boxes-dossiers-ranges', titleAr: 'تقرير توزيع البوكسات والدوسيهات', titleEn: 'Boxes & Dossiers Distribution', group: 'boxes' },
     { id: 'archive-summary', titleAr: 'الملخص العام للأرشفة', titleEn: 'Archive Summary', group: 'operations' },
     { id: 'upload-history', titleAr: 'تقرير سجل عمليات الرفع', titleEn: 'Upload History Log', group: 'operations' },
     { id: 'user-activity', titleAr: 'تقرير نشاط المستخدمين (Audit)', titleEn: 'User Activity (Audit)', group: 'operations' },
@@ -325,6 +329,34 @@ export const ReportsView: React.FC = () => {
     hour12: true,
   });
 
+  const scopeLabel = boxFilter === 'all' ? 'All Boxes' : `Box ${boxFilter}`;
+
+  const unifiedDistributionItems: UnifiedDistributionBox[] = isBoxDirectoryReport
+    ? filteredBoxDirectoryItems.map(b => ({
+        boxCode: b.boxCode,
+        spanLabel: `Range: ${b.firstJobId} → ${b.lastJobId}`,
+        tagLabel: '6 Dossiers',
+        metricsLabel: `${b.archivedProjects}/${b.totalProjects} Archived · ${b.missingProjects} Missing · ${b.pendingProjects} Pending`,
+        status: b.isForceClosed ? 'Force Closed' : b.status,
+        totalSlots: 6,
+        dossiers: b.dossiers.map(d => ({
+          id: d.id,
+          dossierNumber: d.dossierNumber,
+          spanLabel: `${d.fromJobId} → ${d.toJobId}`,
+          metricsLabel:
+            d.missingCount > 0 || d.pendingCount > 0
+              ? `${d.archivedCount}/${d.totalProjects} Archived · ${d.missingCount} Missing · ${d.pendingCount} Pending`
+              : `${d.archivedCount}/${d.totalProjects} Archived`,
+          status: d.status,
+        })),
+      }))
+    : [];
+
+  const distributionTotalSummary = `${unifiedDistributionItems.length} Boxes · ${unifiedDistributionItems.reduce(
+    (sum, b) => sum + b.dossiers.length,
+    0
+  )} Dossiers`;
+
   const buildExportOptions = () => ({
     reportId: activeReport,
     reportTitleEn: activeOption.titleEn,
@@ -341,7 +373,17 @@ export const ReportsView: React.FC = () => {
   });
 
   const handleExportExcel = () => {
-    const fileName = exportReportToExcel(buildExportOptions());
+    const fileName = isBoxDirectoryReport
+      ? exportUnifiedDistributionExcel({
+          reportTitle: 'Boxes & Dossiers Distribution',
+          scopeLabel,
+          totalSummary: distributionTotalSummary,
+          items: unifiedDistributionItems,
+          preparedBy: currentUser?.name || 'System Admin',
+          printDate: formattedPrintDate,
+          filePrefix: 'ARMS_Operations',
+        })
+      : exportReportToExcel(buildExportOptions());
     showToast(
       language === 'ar' ? `تم تصدير التقرير بصيغة Excel: ${fileName}` : `Excel report downloaded: ${fileName}`,
       'success'
@@ -352,7 +394,17 @@ export const ReportsView: React.FC = () => {
     if (exportingPdf) return;
     setExportingPdf(true);
     try {
-      const fileName = await exportReportToPDF(buildExportOptions());
+      const fileName = isBoxDirectoryReport
+        ? await exportUnifiedDistributionPDF({
+            reportTitle: 'Boxes & Dossiers Distribution',
+            scopeLabel,
+            totalSummary: distributionTotalSummary,
+            items: unifiedDistributionItems,
+            preparedBy: currentUser?.name || 'System Admin',
+            printDate: formattedPrintDate,
+            filePrefix: 'ARMS_Operations',
+          })
+        : await exportReportToPDF(buildExportOptions());
       showToast(
         language === 'ar' ? `تم تصدير التقرير بصيغة PDF (A4): ${fileName}` : `A4 PDF report downloaded: ${fileName}`,
         'success'
@@ -366,7 +418,7 @@ export const ReportsView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!printingReport) return;
+    if (!printingReport || isBoxDirectoryReport) return;
 
     const styleEl = document.createElement('style');
     styleEl.id = 'arms-formal-report-print-style';
@@ -400,9 +452,7 @@ export const ReportsView: React.FC = () => {
       window.removeEventListener('afterprint', cleanup);
       styleEl.remove();
     };
-  }, [printingReport]);
-
-  const scopeLabel = boxFilter === 'all' ? 'All Boxes' : `Box ${boxFilter}`;
+  }, [printingReport, isBoxDirectoryReport]);
 
   const tabularPages = paginateReportRows(filteredReportData, REPORT_ROWS_PER_PAGE);
   const boxPages = paginateReportRows(filteredBoxDirectoryItems, REPORT_BOXES_PER_PAGE);
@@ -795,78 +845,98 @@ export const ReportsView: React.FC = () => {
 
         {/* Formal Report Sheet Preview */}
         <div className="lg:col-span-8 bg-white dark:bg-[#111111] border border-slate-200 dark:border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-neutral-800">
-            <div>
-              <h2 className="text-sm font-bold text-[#3F4144] dark:text-white">
-                {language === 'ar' ? activeOption.titleAr : activeOption.titleEn}
-              </h2>
-              <p className="text-xs text-slate-500 tabular-nums">{previewRecordLabel}</p>
-            </div>
-          </div>
+          {isBoxDirectoryReport ? (
+            <UnifiedDistributionSheet
+              titleAr={activeOption.titleAr}
+              titleEn={activeOption.titleEn}
+              scopeLabel={scopeLabel}
+              totalSummary={distributionTotalSummary}
+              items={unifiedDistributionItems}
+              preparedBy={currentUser?.name || 'System Admin'}
+              printDate={formattedPrintDate}
+              language={language}
+              accentFocusBorderClass="focus:border-[#0B56A8]"
+              accentTextHoverClass="hover:border-[#0B56A8] hover:text-[#0B56A8]"
+              printing={printingReport}
+              onPrintComplete={() => setPrintingReport(false)}
+            />
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-neutral-800">
+                <div>
+                  <h2 className="text-sm font-bold text-[#3F4144] dark:text-white">
+                    {language === 'ar' ? activeOption.titleAr : activeOption.titleEn}
+                  </h2>
+                  <p className="text-xs text-slate-500 tabular-nums">{previewRecordLabel}</p>
+                </div>
+              </div>
 
-          {/* Preview Page Flipper Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-neutral-900/60 border border-slate-200 dark:border-neutral-800 rounded-lg px-3 py-2 text-xs">
-            <div className="text-slate-600 dark:text-neutral-300 font-medium tabular-nums">
-              {language === 'ar'
-                ? `الصفحة ${safePreviewPage} من ${totalPreviewPages}`
-                : `Page ${safePreviewPage} of ${totalPreviewPages}`}
-            </div>
+              {/* Preview Page Flipper Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-neutral-900/60 border border-slate-200 dark:border-neutral-800 rounded-lg px-3 py-2 text-xs">
+                <div className="text-slate-600 dark:text-neutral-300 font-medium tabular-nums">
+                  {language === 'ar'
+                    ? `الصفحة ${safePreviewPage} من ${totalPreviewPages}`
+                    : `Page ${safePreviewPage} of ${totalPreviewPages}`}
+                </div>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setPreviewPage(p => Math.max(1, p - 1))}
-                disabled={safePreviewPage <= 1}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-700 dark:text-neutral-200 hover:border-[#0B56A8] hover:text-[#0B56A8] disabled:opacity-40 disabled:pointer-events-none transition-colors font-semibold"
-              >
-                {language === 'ar' ? (
-                  <ChevronRight className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                )}
-                <span>{language === 'ar' ? 'السابقة' : 'Prev'}</span>
-              </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPage(p => Math.max(1, p - 1))}
+                    disabled={safePreviewPage <= 1}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-700 dark:text-neutral-200 hover:border-[#0B56A8] hover:text-[#0B56A8] disabled:opacity-40 disabled:pointer-events-none transition-colors font-semibold"
+                  >
+                    {language === 'ar' ? (
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    )}
+                    <span>{language === 'ar' ? 'السابقة' : 'Prev'}</span>
+                  </button>
 
-              {totalPreviewPages > 1 && (
-                <select
-                  aria-label={language === 'ar' ? 'اختيار الصفحة' : 'Select page'}
-                  value={safePreviewPage}
-                  onChange={e => setPreviewPage(Number(e.target.value))}
-                  className="px-2 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-800 dark:text-neutral-100 font-semibold tabular-nums focus:outline-none focus:border-[#0B56A8]"
-                >
-                  {Array.from({ length: totalPreviewPages }, (_, i) => i + 1).map(pNum => (
-                    <option key={pNum} value={pNum}>
-                      {pNum} / {totalPreviewPages}
-                    </option>
-                  ))}
-                </select>
-              )}
+                  {totalPreviewPages > 1 && (
+                    <select
+                      aria-label={language === 'ar' ? 'اختيار الصفحة' : 'Select page'}
+                      value={safePreviewPage}
+                      onChange={e => setPreviewPage(Number(e.target.value))}
+                      className="px-2 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-800 dark:text-neutral-100 font-semibold tabular-nums focus:outline-none focus:border-[#0B56A8]"
+                    >
+                      {Array.from({ length: totalPreviewPages }, (_, i) => i + 1).map(pNum => (
+                        <option key={pNum} value={pNum}>
+                          {pNum} / {totalPreviewPages}
+                        </option>
+                      ))}
+                    </select>
+                  )}
 
-              <button
-                type="button"
-                onClick={() => setPreviewPage(p => Math.min(totalPreviewPages, p + 1))}
-                disabled={safePreviewPage >= totalPreviewPages}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-700 dark:text-neutral-200 hover:border-[#0B56A8] hover:text-[#0B56A8] disabled:opacity-40 disabled:pointer-events-none transition-colors font-semibold"
-              >
-                <span>{language === 'ar' ? 'التالية' : 'Next'}</span>
-                {language === 'ar' ? (
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPage(p => Math.min(totalPreviewPages, p + 1))}
+                    disabled={safePreviewPage >= totalPreviewPages}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-700 dark:text-neutral-200 hover:border-[#0B56A8] hover:text-[#0B56A8] disabled:opacity-40 disabled:pointer-events-none transition-colors font-semibold"
+                  >
+                    <span>{language === 'ar' ? 'التالية' : 'Next'}</span>
+                    {language === 'ar' ? (
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
 
-          {/* Subtle Preview Desk Stage around the A4 Paper */}
-          <div className="bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5">
-            {renderFormalSheet(safePreviewPage - 1, totalPreviewPages, false)}
-          </div>
+              {/* Subtle Preview Desk Stage around the A4 Paper */}
+              <div className="bg-slate-100/80 dark:bg-black border border-slate-200/80 dark:border-neutral-800 rounded-xl p-3 sm:p-5">
+                {renderFormalSheet(safePreviewPage - 1, totalPreviewPages, false)}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
       {/* Isolated A4 Portrait Print Portal (all pages with full header on each page) */}
       {printingReport &&
+        !isBoxDirectoryReport &&
         createPortal(
           <div id="arms-report-print-portal" className="hidden print:block">
             {Array.from({ length: totalPreviewPages }, (_, idx) =>

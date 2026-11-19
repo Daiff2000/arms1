@@ -57,10 +57,8 @@ export const BoxDetailView: React.FC<BoxDetailViewProps> = ({ boxId, onNavigate,
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5">
-              {language === 'ar'
-                ? `نطاق البوكس: من #${box.firstJobId} إلى #${box.lastJobId} (إجمالي 300 مشروع)`
-                : `Job ID Range: #${box.firstJobId} → #${box.lastJobId} (Strict 300 Project Slots)`}
+            <p className="text-xs text-slate-500 dark:text-neutral-400 mt-0.5 tabular-nums">
+              #{box.firstJobId} → #{box.lastJobId}
             </p>
           </div>
         </div>
@@ -99,19 +97,16 @@ export const BoxDetailView: React.FC<BoxDetailViewProps> = ({ boxId, onNavigate,
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'المشاريع المفقودة (فجوات)' : 'Missing Projects (Gaps)'}</span>
           <div className="text-xl font-bold text-[#E52225] tabular-nums">{box.missingProjects}</div>
-          <span className="text-[10px] text-[#E52225]/80">{language === 'ar' ? 'فجوات تسلسل مثبتة' : 'Proven sequence gaps'}</span>
         </div>
 
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'مشاريع قيد الانتظار' : 'Pending Projects'}</span>
           <div className="text-xl font-bold text-slate-700 dark:text-neutral-300 tabular-nums">{box.pendingProjects}</div>
-          <span className="text-[10px] text-slate-400">{language === 'ar' ? 'لم تستورد بعد' : 'Awaiting delivery'}</span>
         </div>
 
         <div>
           <span className="text-[11px] text-slate-500">{language === 'ar' ? 'الدوسيهات المكتملة' : 'Completed Dossiers'}</span>
           <div className="text-xl font-bold text-slate-900 dark:text-white tabular-nums">{box.completedDossiers} / 6</div>
-          <span className="text-[10px] text-slate-400">50 {language === 'ar' ? 'مشروع لكل دوسيه' : 'projects/dossier'}</span>
         </div>
       </div>
 
